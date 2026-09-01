@@ -33,6 +33,24 @@ chmod +x start.sh
 
 Your browser should open `http://127.0.0.1:8765/`. Leave the terminal window open while you use the viewer. Press `Ctrl+C` to stop.
 
+## Use on a phone
+
+This is a mobile web app (PWA), not a store APK/IPA. Same folder, phone-sized layout.
+
+### Option A — same Wi-Fi as your computer
+
+1. Start the viewer on the computer (`start.bat` / `start.sh`).
+2. The terminal prints a phone address, for example `http://192.168.1.23:8765/`.
+3. On the phone, open that address in Chrome or Safari.
+4. Tap **Open** and pick a `.gpkg` from Files / Drive / Downloads.
+5. Optional: browser menu → **Add to Home Screen** for an app-like icon.
+
+Windows may ask to allow Python through the firewall the first time.
+
+### Option B — GitHub Pages
+
+Upload this folder to GitHub and enable Pages. Open the Pages URL on the phone, then Add to Home Screen. After the first visit the app caches itself and can reopen offline. You still pick `.gpkg` files from the phone.
+
 A sample file is included. After the viewer starts you can open `http://127.0.0.1:8765/?demo=1` to load `samples/rivers.gpkg`.
 
 ## Use

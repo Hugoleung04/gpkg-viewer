@@ -25,12 +25,19 @@
   const $ = (id) => document.getElementById(id);
 
   // ---------- Map ----------
+  const IS_TOUCH = window.matchMedia("(pointer: coarse)").matches ||
+    "ontouchstart" in window;
+
   const map = L.map("map", {
     worldCopyJump: false,
     minZoom: 0,
     maxZoom: 24,
-    zoomControl: true
+    zoomControl: true,
+    tap: true,
+    tapTolerance: 25,
+    bounceAtZoomLimits: false
   }).setView([22.3193, 114.1694], 11); // Hong Kong default
+  if (map.zoomControl) map.zoomControl.setPosition("topright");
 
   const blankPaneBg = document.querySelector(".leaflet-container");
 
@@ -144,7 +151,7 @@
     const t = (geomType || "").toLowerCase();
     if (t.includes("point")) {
       return {
-        radius: 6,
+        radius: IS_TOUCH ? 9 : 6,
         color: "#0b1220",
         weight: 1,
         fillColor: color,
@@ -239,7 +246,7 @@
   const labelRoot = L.DomUtil.create("div", "id-label-root", labelPane);
   const measureCanvas = document.createElement("canvas");
   const measureCtx = measureCanvas.getContext("2d");
-  measureCtx.font = '700 11px "Segoe UI","PingFang HK","Noto Sans TC",system-ui,sans-serif';
+  measureCtx.font = (IS_TOUCH ? "700 12px " : "700 11px ") + '"Segoe UI","PingFang HK","Noto Sans TC",system-ui,sans-serif';
   const labelBoxCache = {};
   let labelUpdateTimer = null;
   let labelPool = [];
@@ -486,6 +493,7 @@
       setStatus("Could not open " + file.name + ": " + (err && err.message ? err.message : err), "error");
     } finally {
       $("dropzone").classList.remove("busy");
+      if (IS_TOUCH) setMenuOpen(false);
     }
   }
 
@@ -912,10 +920,24 @@
     if (b && b.isValid()) map.fitBounds(b, { padding: [28, 28], maxZoom: 16 });
   });
 
-  $("btn-clear").addEventListener("click", () => {
+  function clearAllFiles() {
     [...state.files].forEach((f) => removeFile(f.id));
     setStatus("Cleared.", "");
-  });
+  }
+  $("btn-clear").addEventListener("click", clearAllFiles);
+  if ($("btn-clear-mobile")) $("btn-clear-mobile").addEventListener("click", clearAllFiles);
+
+  function setMenuOpen(open) {
+    document.body.classList.toggle("menu-open", open);
+    const bd = $("backdrop");
+    if (bd) bd.hidden = !open;
+    setTimeout(() => map.invalidateSize(), 260);
+  }
+  $("btn-menu").addEventListener("click", () => setMenuOpen(!document.body.classList.contains("menu-open")));
+  if ($("btn-close-menu")) $("btn-close-menu").addEventListener("click", () => setMenuOpen(false));
+  if ($("backdrop")) $("backdrop").addEventListener("click", () => setMenuOpen(false));
+
+  if (IS_TOUCH) document.body.classList.add("is-touch", "table-collapsed");
 
   $("btn-toggle-table").addEventListener("click", () => {
     document.body.classList.toggle("table-collapsed");
@@ -950,7 +972,11 @@
   // Resize map when sidebar changes
   window.addEventListener("resize", () => map.invalidateSize());
 
-  setStatus("Ready. Open a .gpkg file to begin. Completely local — files never leave this computer.", "ok");
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  }
+
+  setStatus("Ready. Open a .gpkg file to begin. Completely local — files never leave this device.", "ok");
   bootLibrary();
 
   // Optional bundled sample: open with ?demo=1

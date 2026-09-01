@@ -2,56 +2,78 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#12192b" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="GPKG Viewer" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <title>Offline GeoPackage Viewer</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="icon" href="icons/icon-192.png" />
   <link rel="stylesheet" href="vendor/leaflet.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="topbar">
+    <button class="btn icon-btn" id="btn-menu" type="button" aria-label="Layers and settings">☰</button>
     <div class="brand">
       <div class="logo" aria-hidden="true"></div>
       <div>
-        Offline GeoPackage Viewer
-        <small>Local .gpkg inspector — files stay on this computer</small>
+        GeoPackage Viewer
+        <small>Works on phone and desktop — files stay on this device</small>
       </div>
     </div>
     <div class="spacer"></div>
-    <button class="btn btn-primary" id="btn-open" type="button">Open .gpkg</button>
-    <button class="btn" id="btn-fit" type="button">Fit all</button>
-    <button class="btn" id="btn-clear" type="button">Clear</button>
-    <label class="inline">Basemap
-      <select id="basemap">
-        <option value="blank" selected>Blank (fully offline)</option>
-        <option value="osm">OpenStreetMap (needs internet)</option>
-        <option value="esri">Satellite (needs internet)</option>
-        <option value="carto">Carto Dark (needs internet)</option>
-      </select>
-    </label>
-    <label class="inline">
-      <input type="checkbox" id="show-labels" checked />
-      Show IDs
-    </label>
-    <label class="inline">Label field
-      <select id="label-field">
-        <option value="">(auto)</option>
-      </select>
-    </label>
-    <label class="inline">Feature cap
-      <select id="limit">
-        <option value="5000">5,000</option>
-        <option value="25000" selected>25,000</option>
-        <option value="100000">100,000</option>
-        <option value="500000">500,000</option>
-      </select>
-    </label>
+    <div class="top-actions">
+      <button class="btn btn-primary" id="btn-open" type="button">Open</button>
+      <button class="btn" id="btn-fit" type="button">Fit</button>
+      <button class="btn desktop-only" id="btn-clear" type="button">Clear</button>
+    </div>
   </header>
 
-  <aside class="sidebar">
-    <div class="dropzone" id="dropzone">
-      <strong>Drop GeoPackage files here</strong>
-      <div class="hint">or click Open. Multiple .gpkg files supported.</div>
+  <div class="backdrop" id="backdrop" hidden></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head mobile-only">
+      <strong>Layers &amp; settings</strong>
+      <button class="btn icon-btn" id="btn-close-menu" type="button" aria-label="Close">✕</button>
     </div>
+    <div class="dropzone" id="dropzone">
+      <strong>Open a GeoPackage</strong>
+      <div class="hint">Tap Open, or drop a .gpkg file here on desktop.</div>
+    </div>
+
+    <div class="settings-card">
+      <label class="field">Basemap
+        <select id="basemap">
+          <option value="blank" selected>Blank (offline)</option>
+          <option value="osm">OpenStreetMap</option>
+          <option value="esri">Satellite</option>
+          <option value="carto">Carto Dark</option>
+        </select>
+      </label>
+      <label class="field check">
+        <input type="checkbox" id="show-labels" checked />
+        Show IDs on map
+      </label>
+      <label class="field">Label field
+        <select id="label-field">
+          <option value="">(auto)</option>
+        </select>
+      </label>
+      <label class="field">Feature cap
+        <select id="limit">
+          <option value="5000">5,000</option>
+          <option value="25000" selected>25,000</option>
+          <option value="100000">100,000</option>
+          <option value="500000">500,000</option>
+        </select>
+      </label>
+      <button class="btn mobile-only full" id="btn-clear-mobile" type="button">Clear all files</button>
+    </div>
+
     <div class="file-list" id="file-list">
       <p class="empty-hint">No files loaded yet.</p>
     </div>
@@ -61,11 +83,11 @@
   <div id="map"></div>
   <div class="status" id="status">Starting…</div>
 
-  <section class="table-panel">
+  <section class="table-panel" id="table-panel">
     <div class="table-bar">
       <button class="btn btn-ghost" id="btn-toggle-table" type="button">▴ / ▾</button>
       <strong id="table-title">Attributes</strong>
-      <span style="color:var(--muted);font-size:12px">Click a layer to inspect · double-click a layer to zoom</span>
+      <span class="table-hint">Tap a layer · tap a feature for details</span>
     </div>
     <div class="table-wrap" id="table-wrap">
       <p class="empty-hint">Select a vector layer to inspect attributes.</p>
