@@ -42,8 +42,9 @@ This is a mobile web app (PWA), not a store APK/IPA. Same folder, phone-sized la
 1. Start the viewer on the computer (`start.bat` / `start.sh`).
 2. The terminal prints a phone address, for example `http://192.168.1.23:8765/`.
 3. On the phone, open that address in Chrome or Safari.
-4. Tap **Open** and pick a `.gpkg` from Files / Drive / Downloads.
-5. Optional: browser menu → **Add to Home Screen** for an app-like icon.
+4. First save the `.gpkg` into the iPhone **Files** app (On My iPhone, iCloud Drive, or Downloads).
+5. Tap **Open**, then **Browse**, and select that file. iPhone hides unknown types if you only look in Recents — use Browse.
+6. Optional: Safari share sheet → **Add to Home Screen**.
 
 Windows may ask to allow Python through the firewall the first time.
 

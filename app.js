@@ -196,6 +196,7 @@
         });
       });
     });
+    applyAllLabels();
   }
 
   function applyLabelSize() {
@@ -278,16 +279,13 @@
     return !!(state.showLabels && map.getZoom() >= state.labelMinZoom);
   }
 
-  const labelPane = map.createPane("idLabels");
-  labelPane.style.zIndex = 650;
-  labelPane.style.pointerEvents = "none";
-  const labelRoot = L.DomUtil.create("div", "id-label-root", labelPane);
+  const labelGroup = L.layerGroup().addTo(map);
   const measureCanvas = document.createElement("canvas");
   const measureCtx = measureCanvas.getContext("2d");
   measureCtx.font = "700 " + state.labelSize + 'px "Segoe UI","PingFang HK","Noto Sans TC",system-ui,sans-serif';
   const labelBoxCache = {};
   let labelUpdateTimer = null;
-  let labelPool = [];
+  let labelMarkersBuiltFor = "";
 
   function measureLabelBox(text) {
     if (labelBoxCache[text]) return labelBoxCache[text];
@@ -305,19 +303,6 @@
       a.y + a.h + pad <= b.y ||
       b.y + b.h + pad <= a.y
     );
-  }
-
-  function labelAnchors(sx, sy, w, h) {
-    return [
-      { x: sx + 8, y: sy - h / 2 },
-      { x: sx - 8 - w, y: sy - h / 2 },
-      { x: sx - w / 2, y: sy - 10 - h },
-      { x: sx - w / 2, y: sy + 10 },
-      { x: sx + 8, y: sy - 12 - h },
-      { x: sx + 8, y: sy + 8 },
-      { x: sx - 8 - w, y: sy - 12 - h },
-      { x: sx - 8 - w, y: sy + 8 }
-    ];
   }
 
   function collectLabelCandidates() {
@@ -343,98 +328,96 @@
     return out;
   }
 
-  function updateDeclutteredLabels() {
+  function labelSignature() {
+    return [
+      state.showLabels ? "1" : "0",
+      state.labelField,
+      state.labelSize,
+      state.markerSize,
+      state.files.map((f) => f.id + ":" + f.layers.filter((l) => l.visible).map((l) => l.tableName).join(",")).join("|")
+    ].join("/");
+  }
+
+  function rebuildLabelMarkers() {
+    labelGroup.clearLayers();
+    labelMarkersBuiltFor = labelSignature();
+    if (!labelsShouldShow()) return;
+
+    const gap = Math.max(5, state.markerSize + 2);
+    const candidates = collectLabelCandidates();
+    for (let i = 0; i < candidates.length; i++) {
+      const box = measureLabelBox(candidates[i].text);
+      const marker = L.marker(candidates[i].latlng, {
+        interactive: false,
+        keyboard: false,
+        zIndexOffset: 500,
+        icon: L.divIcon({
+          className: "map-id-label-wrap",
+          html: '<div class="map-id-label">' + escapeHtml(candidates[i].text) + "</div>",
+          iconSize: [box.w, box.h],
+          iconAnchor: [-gap, Math.round(box.h / 2)]
+        })
+      });
+      marker._labelW = box.w;
+      marker._labelH = box.h;
+      marker._labelGap = gap;
+      labelGroup.addLayer(marker);
+    }
+    declutterLabelMarkers();
+  }
+
+  function declutterLabelMarkers() {
     if (!labelsShouldShow()) {
-      labelRoot.innerHTML = "";
-      labelPool = [];
+      labelGroup.eachLayer((m) => {
+        if (m._icon) m._icon.style.visibility = "hidden";
+      });
       return;
     }
-
     const size = map.getSize();
-    const topLeft = map.containerPointToLayerPoint([0, 0]);
-    const view = {
-      x: topLeft.x - 40,
-      y: topLeft.y - 20,
-      w: size.x + 80,
-      h: size.y + 40
-    };
-
-    const candidates = collectLabelCandidates();
-    const prepared = [];
-    for (let i = 0; i < candidates.length; i++) {
-      const pt = map.latLngToLayerPoint(candidates[i].latlng);
-      if (pt.x < view.x || pt.y < view.y || pt.x > view.x + view.w || pt.y > view.y + view.h) continue;
-      const box = measureLabelBox(candidates[i].text);
-      prepared.push({
-        text: candidates[i].text,
-        sx: pt.x,
-        sy: pt.y,
-        w: box.w,
-        h: box.h
-      });
-    }
-
-    // Prefer labels closer to view center so the middle of the screen stays readable.
-    const cx = view.x + view.w / 2;
-    const cy = view.y + view.h / 2;
-    prepared.sort((a, b) => {
-      const da = (a.sx - cx) * (a.sx - cx) + (a.sy - cy) * (a.sy - cy);
-      const db = (b.sx - cx) * (b.sx - cx) + (b.sy - cy) * (b.sy - cy);
-      return da - db;
+    const items = [];
+    labelGroup.eachLayer((m) => {
+      const pt = map.latLngToContainerPoint(m.getLatLng());
+      const gap = m._labelGap || 6;
+      const w = m._labelW || 24;
+      const h = m._labelH || 14;
+      const box = { x: pt.x + gap, y: pt.y - h / 2, w: w, h: h };
+      const inView = box.x < size.x && box.y < size.y && box.x + box.w > 0 && box.y + box.h > 0;
+      items.push({ marker: m, box: box, inView: inView });
     });
 
-    const placed = [];
     const occupied = [];
-    const pad = 2;
-    for (let i = 0; i < prepared.length; i++) {
-      const item = prepared[i];
-      const anchors = labelAnchors(item.sx, item.sy, item.w, item.h);
-      let chosen = null;
-      for (let a = 0; a < anchors.length; a++) {
-        const box = { x: anchors[a].x, y: anchors[a].y, w: item.w, h: item.h };
-        let hit = false;
+    let shown = 0;
+    let hidden = 0;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      let vis = item.inView;
+      if (vis) {
         for (let o = 0; o < occupied.length; o++) {
-          if (boxesOverlap(box, occupied[o], pad)) {
-            hit = true;
+          if (boxesOverlap(item.box, occupied[o], 1)) {
+            vis = false;
             break;
           }
         }
-        if (!hit) {
-          chosen = box;
-          break;
-        }
       }
-      if (chosen) {
-        occupied.push(chosen);
-        placed.push({ text: item.text, x: chosen.x, y: chosen.y });
+      if (vis) {
+        occupied.push(item.box);
+        shown += 1;
+      } else if (item.inView) {
+        hidden += 1;
+      }
+      if (item.marker._icon) {
+        item.marker._icon.style.visibility = vis ? "visible" : "hidden";
       }
     }
-
-    while (labelPool.length < placed.length) {
-      const el = document.createElement("div");
-      el.className = "map-id-label";
-      labelRoot.appendChild(el);
-      labelPool.push(el);
-    }
-    for (let i = 0; i < labelPool.length; i++) {
-      const el = labelPool[i];
-      if (i >= placed.length) {
-        el.style.display = "none";
-        continue;
-      }
-      el.style.display = "block";
-      el.textContent = placed[i].text;
-      el.style.transform = "translate(" + placed[i].x + "px," + placed[i].y + "px)";
-    }
-
-    const hidden = prepared.length - placed.length;
     if (hidden > 0) {
-      setStatus(
-        "Showing " + placed.length + " of " + prepared.length +
-          " IDs in view — zoom in to reveal the rest.",
-        ""
-      );
+      setStatus("Showing " + shown + " of " + (shown + hidden) + " IDs in view — zoom in to see the rest.", "");
     }
+  }
+
+  function updateDeclutteredLabels() {
+    const sig = labelSignature();
+    if (sig !== labelMarkersBuiltFor) rebuildLabelMarkers();
+    else declutterLabelMarkers();
   }
 
   function scheduleLabelUpdate() {
@@ -443,10 +426,12 @@
   }
 
   function applyLabelsToLayer() {
+    labelMarkersBuiltFor = "";
     scheduleLabelUpdate();
   }
 
   function applyAllLabels() {
+    labelMarkersBuiltFor = "";
     scheduleLabelUpdate();
   }
 
@@ -794,6 +779,7 @@
       if (on) found.layer.leafletLayer.addTo(map);
       else map.removeLayer(found.layer.leafletLayer);
     }
+    applyAllLabels();
   }
 
   function zoomToLayer(ly) {
@@ -882,14 +868,18 @@
 
   // ---------- Events ----------
   function handleFiles(fileList) {
-    const files = Array.from(fileList || []).filter((f) => {
-      const n = f.name.toLowerCase();
-      return n.endsWith(".gpkg") || n.endsWith(".gpkg.zip") || f.type === "application/geopackage+sqlite3";
-    });
-    if (!files.length) {
-      setStatus("Please choose a .gpkg file.", "warn");
+    const raw = Array.from(fileList || []);
+    if (!raw.length) {
+      setStatus("No file selected.", "warn");
       return;
     }
+    const preferred = raw.filter((f) => {
+      const n = (f.name || "").toLowerCase();
+      return n.endsWith(".gpkg") || n.endsWith(".gpkg.zip") || n.endsWith(".sqlite") ||
+        f.type === "application/geopackage+sqlite3";
+    });
+    // iPhone Files often hides .gpkg from filtered pickers and may omit the extension.
+    const files = preferred.length ? preferred : raw;
     files.reduce((p, f) => p.then(() => openGpkgFile(f)), Promise.resolve());
   }
 
@@ -898,7 +888,7 @@
     e.target.value = "";
   });
 
-  $("btn-open").addEventListener("click", () => $("file-input").click());
+  // Open is a <label for="file-input"> so iPhone Safari can show the Files picker.
 
   const dz = $("dropzone");
   ["dragenter", "dragover"].forEach((ev) => {

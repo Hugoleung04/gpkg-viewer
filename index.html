@@ -27,7 +27,7 @@
     </div>
     <div class="spacer"></div>
     <div class="top-actions">
-      <button class="btn btn-primary" id="btn-open" type="button">Open</button>
+      <label class="btn btn-primary" id="btn-open" for="file-input">Open</label>
       <button class="btn" id="btn-fit" type="button">Fit</button>
       <button class="btn desktop-only" id="btn-clear" type="button">Clear</button>
     </div>
@@ -40,10 +40,10 @@
       <strong>Layers &amp; settings</strong>
       <button class="btn icon-btn" id="btn-close-menu" type="button" aria-label="Close">✕</button>
     </div>
-    <div class="dropzone" id="dropzone">
+    <label class="dropzone" id="dropzone" for="file-input">
       <strong>Open a GeoPackage</strong>
-      <div class="hint">Tap Open, or drop a .gpkg file here on desktop.</div>
-    </div>
+      <div class="hint">Phone: tap here, then Browse in Files and choose the .gpkg. Desktop: click or drop the file.</div>
+    </label>
 
     <div class="settings-card">
       <label class="field">Basemap
@@ -100,7 +100,7 @@
     </div>
   </section>
 
-  <input id="file-input" type="file" accept=".gpkg,application/geopackage+sqlite3" multiple hidden />
+  <input id="file-input" class="file-input-ios" type="file" multiple />
 
   <script src="vendor/leaflet.js"></script>
   <script src="vendor/geopackage.min.js"></script>
