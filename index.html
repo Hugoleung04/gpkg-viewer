@@ -12,8 +12,8 @@
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="icon" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="vendor/leaflet.css?v=23" />
-  <link rel="stylesheet" href="styles.css?v=23" />
+  <link rel="stylesheet" href="vendor/leaflet.css?v=25" />
+  <link rel="stylesheet" href="styles.css?v=25" />
 </head>
 <body>
   <header class="topbar">
@@ -21,7 +21,7 @@
     <div class="brand">
       <div class="logo" aria-hidden="true"></div>
       <div>
-        GeoPackage Viewer <span class="ver">v1.13</span>
+        GeoPackage Viewer <span class="ver">v1.15</span>
         <small>Phone + computer — files stay on this device</small>
       </div>
     </div>
@@ -87,14 +87,16 @@
       </label>
     </div>
 
-    <p class="edit-hint" id="edit-hint">Tap a tree to select it. Drag to move. Double tap to mark red.</p>
+    <p class="edit-hint" id="edit-hint">Tap a tree to select it. Use Move this spot when you want to drag it.</p>
     <div class="settings-card" id="edit-panel" hidden>
       <div class="card-title">Selected spot</div>
       <div class="edit-id" id="edit-id">—</div>
       <label class="field">Color
         <input id="spot-color" type="color" value="#3b82f6" />
       </label>
-      <p class="hint">Drag the yellow-ring spot to move it.</p>
+      <p class="hint">Double tap or Mark red. Turn on Move this spot, then drag.</p>
+      <button class="btn full" id="btn-move-spot" type="button">Move this spot</button>
+      <button class="btn full" id="btn-mark-red" type="button">Mark red</button>
       <button class="btn full" id="btn-reset-spot" type="button">Reset to original</button>
       <button class="btn full" id="btn-save-as-2" type="button">Save as new file</button>
     </div>
@@ -133,8 +135,8 @@
     </div>
   </section>
 
-  <script src="vendor/leaflet.js?v=23"></script>
-  <script src="vendor/geopackage.min.js?v=23"></script>
-  <script src="app.js?v=23"></script>
+  <script src="vendor/leaflet.js?v=25"></script>
+  <script src="vendor/geopackage.min.js?v=25"></script>
+  <script src="app.js?v=25"></script>
 </body>
 </html>

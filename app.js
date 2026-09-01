@@ -16,6 +16,7 @@
     colorIndex: 0,
     selectedLayerKey: null,
     selectedMarker: null,
+    moveMode: false,
     basemap: null,
     featureLimit: MAX_FEATURES_DEFAULT,
     showLabels: true,
@@ -65,6 +66,7 @@
     bounceAtZoomLimits: false
   }).setView([22.3193, 114.1694], 11); // Hong Kong default
   if (map.zoomControl) map.zoomControl.setPosition("topright");
+  if (IS_TOUCH && map.doubleClickZoom) map.doubleClickZoom.disable();
 
   const blankPaneBg = document.querySelector(".leaflet-container");
 
@@ -463,32 +465,64 @@
   let lastTap = { layer: null, t: 0 };
   let draggingMarker = null;
   let dragMoved = false;
+  let touchHandledAt = 0;
+
+  function markSpotRed(layer) {
+    if (!layer) return;
+    paintSpot(layer, "#ef4444", true);
+    selectMarker(layer);
+    setStatus("Marked " + (labelText(layer.feature, state.labelField) || "spot") + " red and saved.", "ok");
+  }
+
+  function nearestSpotAt(containerPoint) {
+    let best = null;
+    let bestD = Infinity;
+    const tol = Math.max(30, currentMarkerRadius() + 18);
+    state.files.forEach((f) => {
+      f.layers.forEach((ly) => {
+        if (!ly.visible || !ly.leafletLayer) return;
+        ly.leafletLayer.eachLayer((l) => {
+          if (typeof l.getLatLng !== "function") return;
+          const p = map.latLngToContainerPoint(l.getLatLng());
+          const d = p.distanceTo(containerPoint);
+          if (d <= tol && d < bestD) {
+            best = l;
+            bestD = d;
+          }
+        });
+      });
+    });
+    return best;
+  }
+
+  function handleSpotTap(layer) {
+    if (!layer || dragMoved) {
+      dragMoved = false;
+      return;
+    }
+    const now = Date.now();
+    if (lastTap.layer === layer && now - lastTap.t < 550) {
+      lastTap = { layer: null, t: 0 };
+      markSpotRed(layer);
+      return;
+    }
+    lastTap = { layer: layer, t: now };
+    selectMarker(layer);
+  }
+
   function attachEditHandlers(layer) {
     layer.on("click", function (e) {
       L.DomEvent.stopPropagation(e);
-      if (dragMoved) {
-        dragMoved = false;
-        return;
-      }
-      const now = Date.now();
-      if (lastTap.layer === layer && now - lastTap.t < 450) {
-        lastTap = { layer: null, t: 0 };
-        paintSpot(layer, "#ef4444", true);
-        selectMarker(layer);
-        setStatus("Marked " + (labelText(layer.feature, state.labelField) || "spot") + " red and saved.", "ok");
-        return;
-      }
-      lastTap = { layer: layer, t: now };
-      selectMarker(layer);
+      if (Date.now() - touchHandledAt < 400) return;
+      handleSpotTap(layer);
     });
     layer.on("dblclick", function (e) {
       L.DomEvent.stop(e);
-      paintSpot(layer, "#ef4444", true);
-      selectMarker(layer);
-      setStatus("Marked " + (labelText(layer.feature, state.labelField) || "spot") + " red and saved.", "ok");
+      if (Date.now() - touchHandledAt < 400) return;
+      markSpotRed(layer);
     });
     layer.on("mousedown", function (e) {
-      if (state.selectedMarker !== layer || typeof layer.setLatLng !== "function") return;
+      if (!state.moveMode || state.selectedMarker !== layer || typeof layer.setLatLng !== "function") return;
       L.DomEvent.stop(e);
       map.dragging.disable();
       draggingMarker = layer;
@@ -496,6 +530,67 @@
       lastTap = { layer: null, t: 0 };
     });
   }
+
+  function setMoveMode(on) {
+    state.moveMode = !!on;
+    document.body.classList.toggle("move-mode", state.moveMode);
+    const btn = $("btn-move-spot");
+    if (btn) {
+      btn.classList.toggle("is-on", state.moveMode);
+      btn.textContent = state.moveMode ? "Moving… tap again to stop" : "Move this spot";
+    }
+    if (!state.moveMode && draggingMarker) finishDrag();
+    if (state.moveMode) {
+      if (IS_TOUCH) setMenuOpen(false);
+      setStatus("Move is on. Drag the yellow-ring spot. Tap Move again to stop.", "ok");
+    }
+  }
+
+  const mapEl = map.getContainer();
+  function touchPoint(ev) {
+    const t = (ev.touches && ev.touches[0]) || (ev.changedTouches && ev.changedTouches[0]);
+    if (!t) return null;
+    const rect = mapEl.getBoundingClientRect();
+    return L.point(t.clientX - rect.left, t.clientY - rect.top);
+  }
+  mapEl.addEventListener("touchstart", function (ev) {
+    if (!state.moveMode || !state.selectedMarker || ev.touches.length !== 1) return;
+    const pt = touchPoint(ev);
+    if (!pt) return;
+    const hit = nearestSpotAt(pt);
+    if (hit !== state.selectedMarker) return;
+    ev.preventDefault();
+    map.dragging.disable();
+    draggingMarker = hit;
+    dragMoved = false;
+    lastTap = { layer: null, t: 0 };
+  }, { passive: false });
+  mapEl.addEventListener("touchmove", function (ev) {
+    if (!draggingMarker) return;
+    ev.preventDefault();
+    const t = ev.touches && ev.touches[0];
+    if (!t) return;
+    draggingMarker.setLatLng(map.mouseEventToLatLng(t));
+    dragMoved = true;
+  }, { passive: false });
+  function onTouchTap(ev) {
+    if (draggingMarker) {
+      ev.preventDefault();
+      finishDrag();
+      return;
+    }
+    if (!ev.changedTouches || ev.changedTouches.length !== 1) return;
+    if (state.moveMode) return;
+    const pt = touchPoint(ev);
+    if (!pt) return;
+    const hit = nearestSpotAt(pt);
+    if (!hit) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    touchHandledAt = Date.now();
+    handleSpotTap(hit);
+  }
+  mapEl.addEventListener("touchend", onTouchTap, { passive: false });
   map.on("mousemove", function (e) {
     if (!draggingMarker) return;
     draggingMarker.setLatLng(e.latlng);
@@ -517,7 +612,8 @@
   }
   map.on("mouseup", finishDrag);
   map.on("click", function () {
-    if (!draggingMarker && !dragMoved) selectMarker(null);
+    if (state.moveMode || draggingMarker || dragMoved) return;
+    selectMarker(null);
   });
 
   function refreshLabelFieldOptions() {
@@ -1265,6 +1361,12 @@
       paintSpot(state.selectedMarker, e.target.value, true);
     });
   }
+  if ($("btn-move-spot")) {
+    $("btn-move-spot").addEventListener("click", () => setMoveMode(!state.moveMode));
+  }
+  if ($("btn-mark-red")) {
+    $("btn-mark-red").addEventListener("click", () => markSpotRed(state.selectedMarker));
+  }
   if ($("btn-reset-spot")) {
     $("btn-reset-spot").addEventListener("click", () => {
       const m = state.selectedMarker;
@@ -1321,7 +1423,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=23").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=25").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
