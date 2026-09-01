@@ -12,8 +12,8 @@
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="icon" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="vendor/leaflet.css?v=15" />
-  <link rel="stylesheet" href="styles.css?v=15" />
+  <link rel="stylesheet" href="vendor/leaflet.css?v=23" />
+  <link rel="stylesheet" href="styles.css?v=23" />
 </head>
 <body>
   <header class="topbar">
@@ -21,14 +21,18 @@
     <div class="brand">
       <div class="logo" aria-hidden="true"></div>
       <div>
-        GeoPackage Viewer <span class="ver">v1.5</span>
+        GeoPackage Viewer <span class="ver">v1.13</span>
         <small>Phone + computer — files stay on this device</small>
       </div>
     </div>
     <div class="spacer"></div>
     <div class="top-actions">
-      <label class="btn btn-primary" id="btn-open" for="file-input">Open</label>
+      <div class="open-wrap" id="btn-open">
+        <span class="btn btn-primary">Open</span>
+        <input id="file-input" class="open-overlay" type="file" accept="*/*" multiple />
+      </div>
       <button class="btn" id="btn-fit" type="button">Fit</button>
+      <button class="btn" id="btn-save-as" type="button">Save as</button>
       <button class="btn desktop-only" id="btn-clear" type="button">Clear</button>
     </div>
   </header>
@@ -40,15 +44,20 @@
       <strong>Layers &amp; settings</strong>
       <button class="btn icon-btn" id="btn-close-menu" type="button" aria-label="Close">✕</button>
     </div>
-    <label class="dropzone" id="dropzone" for="file-input">
+    <div class="dropzone" id="dropzone">
       <strong>Open a GeoPackage</strong>
-      <div class="hint">iPhone: tap here → Browse → pick the file from Files. Do not use the Home Screen app if the picker is empty — open this page in Safari instead. Computer: click or drop the file.</div>
-    </label>
-    <p class="ios-help" id="ios-help" hidden>
-      iPhone Home Screen apps often cannot pick files. Open this same address in <b>Safari</b>, then tap Open.
+      <div class="hint">Computer: click or drop a .gpkg. Phone: tap Open or the file button below.</div>
+      <label class="android-file-btn" id="android-file-btn">
+        Choose file
+        <input id="file-input-phone" type="file" accept="*/*" />
+      </label>
+    </div>
+    <p class="ios-help mobile-only" id="ios-help">
+      iPhone greys out .gpkg files. On the computer press <b>Save .sqlite for iPhone</b>, send that file here, then choose the .sqlite.
     </p>
 
     <div class="settings-card">
+      <div class="card-title">Map</div>
       <label class="field">Basemap
         <select id="basemap">
           <option value="blank" selected>Blank (offline)</option>
@@ -57,21 +66,41 @@
           <option value="carto">Carto Dark</option>
         </select>
       </label>
+      <label class="field">Spot size <span id="marker-size-val">4</span>
+        <input id="marker-size" type="range" min="2" max="12" step="1" value="4" />
+      </label>
+      <label class="field">ID size <span id="label-size-val">9</span>
+        <input id="label-size" type="range" min="7" max="16" step="1" value="9" />
+      </label>
       <label class="field check">
         <input type="checkbox" id="show-labels" checked />
         Show IDs on map
       </label>
-      <label class="field">Marker size <span id="marker-size-val">4</span>
-        <input id="marker-size" type="range" min="2" max="12" step="1" value="4" />
-      </label>
-      <label class="field">Label size <span id="label-size-val">9</span>
-        <input id="label-size" type="range" min="7" max="16" step="1" value="9" />
+      <label class="field check">
+        <input type="checkbox" id="label-frame" checked />
+        Label frame
       </label>
       <label class="field">Label field
         <select id="label-field">
           <option value="">(auto)</option>
         </select>
       </label>
+    </div>
+
+    <p class="edit-hint" id="edit-hint">Tap a tree to select it. Drag to move. Double tap to mark red.</p>
+    <div class="settings-card" id="edit-panel" hidden>
+      <div class="card-title">Selected spot</div>
+      <div class="edit-id" id="edit-id">—</div>
+      <label class="field">Color
+        <input id="spot-color" type="color" value="#3b82f6" />
+      </label>
+      <p class="hint">Drag the yellow-ring spot to move it.</p>
+      <button class="btn full" id="btn-reset-spot" type="button">Reset to original</button>
+      <button class="btn full" id="btn-save-as-2" type="button">Save as new file</button>
+    </div>
+
+    <details class="settings-card extras">
+      <summary>More options</summary>
       <label class="field">Feature cap
         <select id="limit">
           <option value="5000">5,000</option>
@@ -82,7 +111,7 @@
       </label>
       <button class="btn mobile-only full" id="btn-clear-mobile" type="button">Clear all files</button>
       <button class="btn full" id="btn-refresh-app" type="button">Reload latest version</button>
-    </div>
+    </details>
 
     <div class="file-list" id="file-list">
       <p class="empty-hint">No files loaded yet.</p>
@@ -104,10 +133,8 @@
     </div>
   </section>
 
-  <input id="file-input" class="file-input-ios" type="file" multiple />
-
-  <script src="vendor/leaflet.js?v=15"></script>
-  <script src="vendor/geopackage.min.js?v=15"></script>
-  <script src="app.js?v=15"></script>
+  <script src="vendor/leaflet.js?v=23"></script>
+  <script src="vendor/geopackage.min.js?v=23"></script>
+  <script src="app.js?v=23"></script>
 </body>
 </html>

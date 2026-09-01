@@ -15,26 +15,31 @@
     files: [], // { id, name, size, geoPackage, layers: [] }
     colorIndex: 0,
     selectedLayerKey: null,
+    selectedMarker: null,
     basemap: null,
     featureLimit: MAX_FEATURES_DEFAULT,
     showLabels: true,
     labelField: "",
     labelMinZoom: 0,
     markerSize: 4,
-    labelSize: 9
+    labelSize: 9,
+    labelFrame: true,
+    markerZoomRef: null
   };
 
   try {
     const saved = JSON.parse(localStorage.getItem("gpkg-viewer-sizes") || "null");
     if (saved && saved.markerSize) state.markerSize = saved.markerSize;
     if (saved && saved.labelSize) state.labelSize = saved.labelSize;
+    if (saved && typeof saved.labelFrame === "boolean") state.labelFrame = saved.labelFrame;
   } catch (_) {}
 
   function persistSizes() {
     try {
       localStorage.setItem("gpkg-viewer-sizes", JSON.stringify({
         markerSize: state.markerSize,
-        labelSize: state.labelSize
+        labelSize: state.labelSize,
+        labelFrame: state.labelFrame
       }));
     } catch (_) {}
   }
@@ -44,6 +49,11 @@
   // ---------- Map ----------
   const IS_TOUCH = window.matchMedia("(pointer: coarse)").matches ||
     "ontouchstart" in window;
+  const IS_ANDROID = /Android/i.test(navigator.userAgent || "");
+  if (IS_TOUCH) document.documentElement.classList.add("is-touch");
+  if (IS_ANDROID) document.documentElement.classList.add("is-android");
+  document.body.classList.toggle("is-touch", IS_TOUCH);
+  document.body.classList.toggle("is-android", IS_ANDROID);
 
   const map = L.map("map", {
     worldCopyJump: false,
@@ -164,9 +174,16 @@
       .replace(/"/g, "&quot;");
   }
 
+  function currentMarkerRadius() {
+    const z = map.getZoom();
+    const ref = state.markerZoomRef == null ? z : state.markerZoomRef;
+    const scale = Math.pow(2, (z - ref) * 0.5);
+    return Math.max(1.6, Math.min(32, state.markerSize * scale));
+  }
+
   function styleFor(color, geomType) {
     const t = (geomType || "").toLowerCase();
-    const r = state.markerSize;
+    const r = currentMarkerRadius();
     if (t.includes("point")) {
       return {
         radius: r,
@@ -185,30 +202,47 @@
     };
   }
 
-  function applyMarkerSize() {
+  function applyMarkerRadii() {
     state.files.forEach((f) => {
       f.layers.forEach((ly) => {
         if (ly.kind !== "feature" || !ly.leafletLayer) return;
-        ly.leafletLayer.eachLayer((l) => {
-          const st = styleFor(ly.color, ly.geomType);
-          if (typeof l.setRadius === "function") l.setRadius(st.radius);
-          if (typeof l.setStyle === "function") l.setStyle(st);
-        });
+        ly.leafletLayer.eachLayer((l) => applyFeatureStyle(l, ly));
       });
     });
+  }
+
+  function applyMarkerSize() {
+    state.markerZoomRef = map.getZoom();
+    applyMarkerRadii();
     applyAllLabels();
   }
 
   function applyLabelSize() {
     document.documentElement.style.setProperty("--label-size", state.labelSize + "px");
-    measureCtx.font = "700 " + state.labelSize + 'px "Segoe UI","PingFang HK","Noto Sans TC",system-ui,sans-serif';
-    Object.keys(labelBoxCache).forEach((k) => { delete labelBoxCache[k]; });
-    scheduleLabelUpdate();
+    syncMeasureFont();
+    applyAllLabels();
+  }
+
+  function featureColor(layer, fallback) {
+    const p = layer && layer.feature && layer.feature.properties;
+    return (p && p._editColor) || fallback;
+  }
+
+  function applyFeatureStyle(layer, ly) {
+    if (!layer || typeof layer.setStyle !== "function") return;
+    const st = styleFor(featureColor(layer, ly.color), ly.geomType);
+    if (state.selectedMarker === layer) {
+      st.weight = 3;
+      st.color = "#fbbf24";
+    }
+    layer.setStyle(st);
+    if (typeof layer.setRadius === "function") layer.setRadius(st.radius);
   }
 
   function pointToLayer(color) {
     return function (feature, latlng) {
-      return L.circleMarker(latlng, styleFor(color, "point"));
+      const c = (feature.properties && feature.properties._editColor) || color;
+      return L.circleMarker(latlng, styleFor(c, "point"));
     };
   }
 
@@ -279,167 +313,212 @@
     return !!(state.showLabels && map.getZoom() >= state.labelMinZoom);
   }
 
-  if (!map.getPane("idLabels")) {
-    map.createPane("idLabels");
-    map.getPane("idLabels").style.zIndex = "650";
-    map.getPane("idLabels").style.pointerEvents = "none";
-  }
-  const labelGroup = L.layerGroup().addTo(map);
   const measureCanvas = document.createElement("canvas");
   const measureCtx = measureCanvas.getContext("2d");
-  measureCtx.font = "700 " + state.labelSize + 'px "Segoe UI","PingFang HK","Noto Sans TC",system-ui,sans-serif';
   const labelBoxCache = {};
-  let labelUpdateTimer = null;
-  let labelMarkersBuiltFor = "";
 
-  function measureLabelBox(text) {
-    if (labelBoxCache[text]) return labelBoxCache[text];
-    const padX = Math.max(6, Math.round(state.labelSize * 0.7));
-    const w = Math.ceil(measureCtx.measureText(text).width) + padX;
-    const box = { w: w, h: Math.round(state.labelSize + 6) };
-    labelBoxCache[text] = box;
-    return box;
+  function syncMeasureFont() {
+    measureCtx.font = "700 " + state.labelSize + 'px "Segoe UI","PingFang HK","Noto Sans TC",system-ui,sans-serif';
+    Object.keys(labelBoxCache).forEach((k) => { delete labelBoxCache[k]; });
   }
+  syncMeasureFont();
 
-  function boxesOverlap(a, b, pad) {
-    return !(
-      a.x + a.w + pad <= b.x ||
-      b.x + b.w + pad <= a.x ||
-      a.y + a.h + pad <= b.y ||
-      b.y + b.h + pad <= a.y
-    );
-  }
-
-  function collectLabelCandidates() {
-    const field = state.labelField;
-    const out = [];
-    state.files.forEach((f) => {
-      f.layers.forEach((ly) => {
-        if (!ly.visible || ly.kind !== "feature" || !ly.leafletLayer) return;
-        ly.leafletLayer.eachLayer((l) => {
-          const text = labelText(l.feature, field);
-          if (!text) return;
-          let latlng = null;
-          if (typeof l.getLatLng === "function") latlng = l.getLatLng();
-          else if (typeof l.getBounds === "function") {
-            const b = l.getBounds();
-            if (b && b.isValid()) latlng = b.getCenter();
-          }
-          if (!latlng) return;
-          out.push({ latlng: latlng, text: text });
-        });
-      });
-    });
-    return out;
-  }
-
-  function labelSignature() {
-    return [
-      state.showLabels ? "1" : "0",
-      state.labelField,
-      state.labelSize,
-      state.markerSize,
-      state.files.map((f) => f.id + ":" + f.layers.filter((l) => l.visible).map((l) => l.tableName).join(",")).join("|")
-    ].join("/");
-  }
-
-  function rebuildLabelMarkers() {
-    labelGroup.clearLayers();
-    labelMarkersBuiltFor = labelSignature();
+  function bindFeatureLabel(layer) {
+    if (!layer) return;
+    try { if (layer.unbindTooltip) layer.unbindTooltip(); } catch (_) {}
     if (!labelsShouldShow()) return;
-
-    const gap = Math.max(5, state.markerSize + 2);
-    const candidates = collectLabelCandidates();
-    for (let i = 0; i < candidates.length; i++) {
-      const box = measureLabelBox(candidates[i].text);
-      const marker = L.marker(candidates[i].latlng, {
-        interactive: false,
-        keyboard: false,
-        pane: "idLabels",
-        zIndexOffset: 500,
-        icon: L.divIcon({
-          className: "map-id-label-wrap",
-          html: '<div class="map-id-label">' + escapeHtml(candidates[i].text) + "</div>",
-          iconSize: [box.w, box.h],
-          iconAnchor: [-gap, Math.round(box.h / 2)]
-        })
-      });
-      marker._labelW = box.w;
-      marker._labelH = box.h;
-      marker._labelGap = gap;
-      labelGroup.addLayer(marker);
-    }
-    declutterLabelMarkers();
-  }
-
-  function declutterLabelMarkers() {
-    if (!labelsShouldShow()) {
-      labelGroup.eachLayer((m) => {
-        if (m._icon) m._icon.style.visibility = "hidden";
-      });
-      return;
-    }
-    const size = map.getSize();
-    const items = [];
-    labelGroup.eachLayer((m) => {
-      const pt = map.latLngToContainerPoint(m.getLatLng());
-      const gap = m._labelGap || 6;
-      const w = m._labelW || 24;
-      const h = m._labelH || 14;
-      const box = { x: pt.x + gap, y: pt.y - h / 2, w: w, h: h };
-      const inView = box.x < size.x && box.y < size.y && box.x + box.w > 0 && box.y + box.h > 0;
-      items.push({ marker: m, box: box, inView: inView });
+    const text = labelText(layer.feature, state.labelField);
+    if (!text) return;
+    layer.bindTooltip(escapeHtml(text), {
+      permanent: true,
+      direction: "right",
+      offset: [Math.max(6, currentMarkerRadius() + 3), 0],
+      className: "map-id-label" + (state.labelFrame ? "" : " no-frame"),
+      opacity: 1,
+      sticky: false
     });
-
-    const occupied = [];
-    let shown = 0;
-    let hidden = 0;
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      let vis = item.inView;
-      if (vis) {
-        for (let o = 0; o < occupied.length; o++) {
-          if (boxesOverlap(item.box, occupied[o], 1)) {
-            vis = false;
-            break;
-          }
-        }
-      }
-      if (vis) {
-        occupied.push(item.box);
-        shown += 1;
-      } else if (item.inView) {
-        hidden += 1;
-      }
-      if (item.marker._icon) {
-        item.marker._icon.style.visibility = vis ? "visible" : "hidden";
-      }
-    }
-    if (hidden > 0) {
-      setStatus("Showing " + shown + " of " + (shown + hidden) + " IDs in view — zoom in to see the rest.", "");
-    }
   }
 
-  function updateDeclutteredLabels() {
-    const sig = labelSignature();
-    if (sig !== labelMarkersBuiltFor) rebuildLabelMarkers();
-    else declutterLabelMarkers();
-  }
-
-  function scheduleLabelUpdate() {
-    if (labelUpdateTimer) cancelAnimationFrame(labelUpdateTimer);
-    labelUpdateTimer = requestAnimationFrame(updateDeclutteredLabels);
-  }
-
-  function applyLabelsToLayer() {
-    labelMarkersBuiltFor = "";
-    scheduleLabelUpdate();
+  function applyLabelsToLayer(ly) {
+    if (!ly || !ly.leafletLayer || ly.kind !== "feature") return;
+    ly.leafletLayer.eachLayer((l) => bindFeatureLabel(l));
   }
 
   function applyAllLabels() {
-    labelMarkersBuiltFor = "";
-    scheduleLabelUpdate();
+    state.files.forEach((f) => f.layers.forEach(applyLabelsToLayer));
   }
+
+  function scheduleLabelUpdate() {}
+
+  function parentLayerOf(marker) {
+    let found = null;
+    state.files.forEach((f) => {
+      f.layers.forEach((ly) => {
+        if (ly.leafletLayer && ly.leafletLayer.hasLayer && ly.leafletLayer.hasLayer(marker)) {
+          found = ly;
+        }
+      });
+    });
+    return found;
+  }
+
+  function loadColorEdits() {
+    try { return JSON.parse(localStorage.getItem("gpkg-viewer-edits") || "{}"); }
+    catch (_) { return {}; }
+  }
+  function persistColorEdits() {
+    const edits = {};
+    state.files.forEach((f) => {
+      f.layers.forEach((ly) => {
+        if (!ly.leafletLayer) return;
+        ly.leafletLayer.eachLayer((l) => {
+          if (!l.feature) return;
+          const rec = {};
+          const c = l.feature.properties && l.feature.properties._editColor;
+          if (c) rec.color = c;
+          if (typeof l.getLatLng === "function") {
+            const ll = l.getLatLng();
+            const orig = l.feature.properties && l.feature.properties._origLatLng;
+            if (orig && (Math.abs(ll.lat - orig[0]) > 1e-8 || Math.abs(ll.lng - orig[1]) > 1e-8)) {
+              rec.lat = ll.lat;
+              rec.lng = ll.lng;
+            }
+          }
+          if (rec.color || rec.lat != null) edits[featureKey(l, f.name)] = rec;
+        });
+      });
+    });
+    try { localStorage.setItem("gpkg-viewer-edits", JSON.stringify(edits)); } catch (_) {}
+  }
+  function featureKey(marker, fileName) {
+    const feat = marker.feature || {};
+    const props = feat.properties || {};
+    if (props._origKey) return props._origKey;
+    const id = labelText(feat, state.labelField) || props.fid || props.id || "";
+    const coords = (feat.geometry && feat.geometry.coordinates) || [];
+    return (fileName || "") + "|" + id + "|" + coords.slice(0, 2).join(",");
+  }
+  function applySavedColor(marker, fileName) {
+    if (!marker.feature) return;
+    marker.feature.properties = marker.feature.properties || {};
+    if (!marker.feature.properties._origKey) {
+      marker.feature.properties._origKey = featureKey(marker, fileName);
+    }
+    if (!marker.feature.properties._origLatLng && typeof marker.getLatLng === "function") {
+      const ll = marker.getLatLng();
+      marker.feature.properties._origLatLng = [ll.lat, ll.lng];
+    }
+    const raw = loadColorEdits()[marker.feature.properties._origKey];
+    const saved = typeof raw === "string" ? { color: raw } : (raw || null);
+    if (!saved) return;
+    if (saved.color) marker.feature.properties._editColor = saved.color;
+    if (saved.lat != null && saved.lng != null && typeof marker.setLatLng === "function") {
+      marker.setLatLng([saved.lat, saved.lng]);
+      marker.feature.geometry = { type: "Point", coordinates: [saved.lng, saved.lat] };
+    }
+  }
+  function paintSpot(marker, color, save) {
+    if (!marker || !marker.feature) return;
+    marker.feature.properties = marker.feature.properties || {};
+    if (color) marker.feature.properties._editColor = color;
+    else delete marker.feature.properties._editColor;
+    const ly = parentLayerOf(marker) || { color: color || "#3b82f6", geomType: "point" };
+    applyFeatureStyle(marker, ly);
+    if (save) persistColorEdits();
+    refreshEditPanel();
+  }
+
+  function selectMarker(marker) {
+    const prev = state.selectedMarker;
+    state.selectedMarker = marker || null;
+    if (prev) {
+      const ly = parentLayerOf(prev);
+      if (ly) applyFeatureStyle(prev, ly);
+    }
+    if (state.selectedMarker) {
+      const ly = parentLayerOf(state.selectedMarker);
+      if (ly) applyFeatureStyle(state.selectedMarker, ly);
+    }
+    refreshEditPanel();
+  }
+
+  function refreshEditPanel() {
+    const box = $("edit-panel");
+    if (!box) return;
+    const m = state.selectedMarker;
+    if (!m || !m.feature) {
+      box.hidden = true;
+      if ($("edit-hint")) $("edit-hint").hidden = false;
+      return;
+    }
+    box.hidden = false;
+    if ($("edit-hint")) $("edit-hint").hidden = true;
+    $("edit-id").textContent = labelText(m.feature, state.labelField) || "(no ID)";
+    const ly = parentLayerOf(m);
+    if ($("spot-color")) {
+      $("spot-color").value = featureColor(m, (ly && ly.color) || "#3b82f6");
+    }
+  }
+
+  let lastTap = { layer: null, t: 0 };
+  let draggingMarker = null;
+  let dragMoved = false;
+  function attachEditHandlers(layer) {
+    layer.on("click", function (e) {
+      L.DomEvent.stopPropagation(e);
+      if (dragMoved) {
+        dragMoved = false;
+        return;
+      }
+      const now = Date.now();
+      if (lastTap.layer === layer && now - lastTap.t < 450) {
+        lastTap = { layer: null, t: 0 };
+        paintSpot(layer, "#ef4444", true);
+        selectMarker(layer);
+        setStatus("Marked " + (labelText(layer.feature, state.labelField) || "spot") + " red and saved.", "ok");
+        return;
+      }
+      lastTap = { layer: layer, t: now };
+      selectMarker(layer);
+    });
+    layer.on("dblclick", function (e) {
+      L.DomEvent.stop(e);
+      paintSpot(layer, "#ef4444", true);
+      selectMarker(layer);
+      setStatus("Marked " + (labelText(layer.feature, state.labelField) || "spot") + " red and saved.", "ok");
+    });
+    layer.on("mousedown", function (e) {
+      if (state.selectedMarker !== layer || typeof layer.setLatLng !== "function") return;
+      L.DomEvent.stop(e);
+      map.dragging.disable();
+      draggingMarker = layer;
+      dragMoved = false;
+      lastTap = { layer: null, t: 0 };
+    });
+  }
+  map.on("mousemove", function (e) {
+    if (!draggingMarker) return;
+    draggingMarker.setLatLng(e.latlng);
+    dragMoved = true;
+  });
+  function finishDrag() {
+    if (!draggingMarker) return;
+    const m = draggingMarker;
+    if (typeof m.getLatLng === "function" && m.feature) {
+      const ll = m.getLatLng();
+      m.feature.geometry = { type: "Point", coordinates: [ll.lng, ll.lat] };
+      bindFeatureLabel(m);
+      persistColorEdits();
+      refreshEditPanel();
+      if (dragMoved) setStatus("Moved " + (labelText(m.feature, state.labelField) || "spot") + " and saved.", "ok");
+    }
+    draggingMarker = null;
+    map.dragging.enable();
+  }
+  map.on("mouseup", finishDrag);
+  map.on("click", function () {
+    if (!draggingMarker && !dragMoved) selectMarker(null);
+  });
 
   function refreshLabelFieldOptions() {
     const sel = $("label-field");
@@ -484,6 +563,7 @@
         name: file.name,
         size: file.size,
         geoPackage: geoPackage,
+        originalBytes: bytes,
         layers: []
       };
 
@@ -595,11 +675,17 @@
       {
         style: () => styleFor(color, geomType),
         pointToLayer: pointToLayer(color),
-        onEachFeature: (feat, lyr) => bindPopup(lyr, feat, tableName),
-        renderer: L.canvas({ padding: 0.5 })
+        onEachFeature: (feat, lyr) => {
+          bindPopup(lyr, feat, tableName);
+          attachEditHandlers(lyr);
+        }
       }
     );
     leafletLayer.addTo(map);
+    leafletLayer.eachLayer((l) => {
+      applySavedColor(l, fileRec.name);
+      applyFeatureStyle(l, { color: color, geomType: geomType });
+    });
 
     const layer = {
       key: layerKey(fileRec.id, tableName),
@@ -759,6 +845,7 @@
 
       html += '<div class="file-actions">';
       html += '<button type="button" data-zoom-file="' + f.id + '">Zoom to file</button>';
+      html += '<button type="button" data-iphone-copy="' + f.id + '">Save .sqlite for iPhone</button>';
       html += '<button type="button" class="danger" data-remove-file="' + f.id + '">Remove</button>';
       html += "</div></div>";
     });
@@ -766,6 +853,26 @@
     host.innerHTML = html;
     $("stats").textContent = state.files.length + " file" + (state.files.length === 1 ? "" : "s") +
       " · " + totalLayers + " layers · " + totalFeats.toLocaleString() + " features";
+  }
+
+  function downloadIphoneCopy(fileId) {
+    const f = state.files.find((x) => x.id === fileId);
+    if (!f || !f.originalBytes) {
+      setStatus("Open the GeoPackage on this computer first, then save an iPhone copy.", "warn");
+      return;
+    }
+    const base = String(f.name || "data").replace(/\.gpkg$/i, "");
+    const blob = new Blob([f.originalBytes], { type: "application/octet-stream" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = base + ".sqlite";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 500);
+    setStatus("Saved " + base + ".sqlite — AirDrop / iCloud that file to the iPhone, then Open it there.", "ok");
   }
 
   function findLayer(key) {
@@ -873,6 +980,84 @@
   }
 
   // ---------- Events ----------
+  async function openGeoJsonFile(file) {
+    setStatus("Opening " + file.name + " …", "");
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      let features = [];
+      if (data && data.type === "FeatureCollection" && Array.isArray(data.features)) {
+        features = data.features;
+      } else if (data && data.type === "Feature") {
+        features = [data];
+      } else if (Array.isArray(data)) {
+        features = data;
+      }
+      features = features.filter((ft) => ft && ft.geometry);
+      if (!features.length) throw new Error("No features in this GeoJSON file.");
+
+      features.forEach((ft) => {
+        const p = ft.properties || {};
+        if (p.color && !p._editColor) p._editColor = p.color;
+        ft.properties = p;
+      });
+
+      const fileId = "f" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+      const rec = { id: fileId, name: file.name, size: file.size, geoPackage: null, layers: [] };
+      const geomType = detectGeomType(features);
+      const columns = collectPropertyKeys(features);
+      const color = nextColor();
+      const tableName = file.name.replace(/\.[^.]+$/, "") || "layer";
+      const leafletLayer = L.geoJSON(
+        { type: "FeatureCollection", features: features },
+        {
+          style: (feat) => styleFor((feat.properties && feat.properties._editColor) || color, geomType),
+          pointToLayer: pointToLayer(color),
+          onEachFeature: (feat, lyr) => {
+            bindPopup(lyr, feat, tableName);
+            attachEditHandlers(lyr);
+          }
+        }
+      );
+      leafletLayer.addTo(map);
+      leafletLayer.eachLayer((l) => {
+        applySavedColor(l, rec.name);
+        applyFeatureStyle(l, { color: color, geomType: geomType });
+      });
+      rec.layers.push({
+        key: layerKey(fileId, tableName),
+        tableName: tableName,
+        kind: "feature",
+        color: color,
+        count: features.length,
+        loaded: features.length,
+        truncated: false,
+        geomType: geomType,
+        columns: columns,
+        features: features,
+        leafletLayer: leafletLayer,
+        visible: true
+      });
+      state.files.push(rec);
+      refreshLabelFieldOptions();
+      applyAllLabels();
+      renderSidebar();
+      if (leafletLayer.getBounds && leafletLayer.getBounds().isValid()) {
+        map.fitBounds(leafletLayer.getBounds(), { padding: [28, 28], maxZoom: 16 });
+      }
+      setStatus("Loaded " + file.name + " — " + features.length + " features.", "ok");
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not open " + file.name + ": " + (err && err.message ? err.message : err), "error");
+    }
+  }
+
+  function openAnyFile(file) {
+    const n = (file.name || "").toLowerCase();
+    if (n.endsWith(".geojson") || n.endsWith(".json")) return openGeoJsonFile(file);
+    return openGpkgFile(file);
+  }
+
   function handleFiles(fileList) {
     const raw = Array.from(fileList || []);
     if (!raw.length) {
@@ -882,17 +1067,24 @@
     const preferred = raw.filter((f) => {
       const n = (f.name || "").toLowerCase();
       return n.endsWith(".gpkg") || n.endsWith(".gpkg.zip") || n.endsWith(".sqlite") ||
-        f.type === "application/geopackage+sqlite3";
+        n.endsWith(".db") || n.endsWith(".zip") || n.endsWith(".geojson") || n.endsWith(".json") ||
+        f.type === "application/geopackage+sqlite3" || f.type === "application/geo+json" ||
+        f.type === "application/json";
     });
-    // iPhone Files often hides .gpkg from filtered pickers and may omit the extension.
     const files = preferred.length ? preferred : raw;
-    files.reduce((p, f) => p.then(() => openGpkgFile(f)), Promise.resolve());
+    files.reduce((p, f) => p.then(() => openAnyFile(f)), Promise.resolve());
   }
 
   $("file-input").addEventListener("change", (e) => {
     handleFiles(e.target.files);
     e.target.value = "";
   });
+  if ($("file-input-phone")) {
+    $("file-input-phone").addEventListener("change", (e) => {
+      handleFiles(e.target.files);
+      e.target.value = "";
+    });
+  }
 
   // Open is a <label for="file-input"> so iPhone Safari can show the Files picker.
 
@@ -927,6 +1119,10 @@
       removeFile(btn.dataset.removeFile);
       return;
     }
+    if (btn && btn.dataset.iphoneCopy) {
+      downloadIphoneCopy(btn.dataset.iphoneCopy);
+      return;
+    }
     const row = e.target.closest(".layer-row");
     if (row && row.dataset.key) {
       selectLayer(row.dataset.key);
@@ -940,6 +1136,74 @@
   });
 
   $("basemap").addEventListener("change", (e) => setBasemap(e.target.value));
+
+  function collectEditedCollection() {
+    const features = [];
+    state.files.forEach((f) => {
+      f.layers.forEach((ly) => {
+        if (ly.kind !== "feature" || !ly.leafletLayer) return;
+        ly.leafletLayer.eachLayer((l) => {
+          if (!l.feature) return;
+          const props = Object.assign({}, l.feature.properties || {});
+          delete props._origKey;
+          delete props._origLatLng;
+          if (props._editColor) {
+            props.color = props._editColor;
+          }
+          let geometry = l.feature.geometry;
+          if (typeof l.getLatLng === "function") {
+            const ll = l.getLatLng();
+            geometry = { type: "Point", coordinates: [ll.lng, ll.lat] };
+          }
+          features.push({ type: "Feature", properties: props, geometry: geometry });
+        });
+      });
+    });
+    return { type: "FeatureCollection", features: features };
+  }
+
+  function suggestedSaveName() {
+    const n = (state.files[0] && state.files[0].name) || "trees";
+    return n.replace(/\.(gpkg|sqlite|db|geojson|json)$/i, "") + "-edited.geojson";
+  }
+
+  async function saveAsNewFile() {
+    const fc = collectEditedCollection();
+    if (!fc.features.length) {
+      setStatus("Open a file first, then Save as.", "warn");
+      return;
+    }
+    const name = suggestedSaveName();
+    const text = JSON.stringify(fc, null, 2);
+    const blob = new Blob([text], { type: "application/geo+json" });
+    try {
+      if (window.showSaveFilePicker) {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: name,
+          types: [
+            { description: "GeoJSON", accept: { "application/geo+json": [".geojson"], "application/json": [".json"] } }
+          ]
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        setStatus("Saved " + handle.name + " (" + fc.features.length + " spots).", "ok");
+        return;
+      }
+    } catch (err) {
+      if (err && err.name === "AbortError") return;
+    }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+    setStatus("Downloaded " + name + " (" + fc.features.length + " spots).", "ok");
+  }
+
+  if ($("btn-save-as")) $("btn-save-as").addEventListener("click", saveAsNewFile);
+  if ($("btn-save-as-2")) $("btn-save-as-2").addEventListener("click", saveAsNewFile);
 
   $("btn-fit").addEventListener("click", () => {
     const layers = [];
@@ -988,6 +1252,33 @@
     state.showLabels = e.target.checked;
     applyAllLabels();
   });
+  if ($("label-frame")) {
+    $("label-frame").checked = state.labelFrame;
+    $("label-frame").addEventListener("change", (e) => {
+      state.labelFrame = e.target.checked;
+      persistSizes();
+      applyAllLabels();
+    });
+  }
+  if ($("spot-color")) {
+    $("spot-color").addEventListener("input", (e) => {
+      paintSpot(state.selectedMarker, e.target.value, true);
+    });
+  }
+  if ($("btn-reset-spot")) {
+    $("btn-reset-spot").addEventListener("click", () => {
+      const m = state.selectedMarker;
+      if (!m || !m.feature) return;
+      const orig = m.feature.properties && m.feature.properties._origLatLng;
+      if (orig && typeof m.setLatLng === "function") {
+        m.setLatLng(orig);
+        m.feature.geometry = { type: "Point", coordinates: [orig[1], orig[0]] };
+        bindFeatureLabel(m);
+      }
+      paintSpot(m, null, true);
+      setStatus("Restored original color and location.", "ok");
+    });
+  }
 
   function bindSizeSlider(id, key, valId, applyFn) {
     const el = $(id);
@@ -1011,6 +1302,11 @@
     applyAllLabels();
   });
 
+  map.on("zoom", applyMarkerRadii);
+  map.on("zoomend", function () {
+    applyMarkerRadii();
+    applyAllLabels();
+  });
   map.on("moveend zoomend resize", scheduleLabelUpdate);
 
   // Keyboard
@@ -1025,7 +1321,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=15").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=23").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
