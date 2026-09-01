@@ -12,8 +12,8 @@
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="icon" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="vendor/leaflet.css" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="vendor/leaflet.css?v=15" />
+  <link rel="stylesheet" href="styles.css?v=15" />
 </head>
 <body>
   <header class="topbar">
@@ -21,8 +21,8 @@
     <div class="brand">
       <div class="logo" aria-hidden="true"></div>
       <div>
-        GeoPackage Viewer
-        <small>Works on phone and desktop — files stay on this device</small>
+        GeoPackage Viewer <span class="ver">v1.5</span>
+        <small>Phone + computer — files stay on this device</small>
       </div>
     </div>
     <div class="spacer"></div>
@@ -42,8 +42,11 @@
     </div>
     <label class="dropzone" id="dropzone" for="file-input">
       <strong>Open a GeoPackage</strong>
-      <div class="hint">Phone: tap here, then Browse in Files and choose the .gpkg. Desktop: click or drop the file.</div>
+      <div class="hint">iPhone: tap here → Browse → pick the file from Files. Do not use the Home Screen app if the picker is empty — open this page in Safari instead. Computer: click or drop the file.</div>
     </label>
+    <p class="ios-help" id="ios-help" hidden>
+      iPhone Home Screen apps often cannot pick files. Open this same address in <b>Safari</b>, then tap Open.
+    </p>
 
     <div class="settings-card">
       <label class="field">Basemap
@@ -78,6 +81,7 @@
         </select>
       </label>
       <button class="btn mobile-only full" id="btn-clear-mobile" type="button">Clear all files</button>
+      <button class="btn full" id="btn-refresh-app" type="button">Reload latest version</button>
     </div>
 
     <div class="file-list" id="file-list">
@@ -102,8 +106,8 @@
 
   <input id="file-input" class="file-input-ios" type="file" multiple />
 
-  <script src="vendor/leaflet.js"></script>
-  <script src="vendor/geopackage.min.js"></script>
-  <script src="app.js"></script>
+  <script src="vendor/leaflet.js?v=15"></script>
+  <script src="vendor/geopackage.min.js?v=15"></script>
+  <script src="app.js?v=15"></script>
 </body>
 </html>

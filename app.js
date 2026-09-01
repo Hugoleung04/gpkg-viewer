@@ -279,6 +279,11 @@
     return !!(state.showLabels && map.getZoom() >= state.labelMinZoom);
   }
 
+  if (!map.getPane("idLabels")) {
+    map.createPane("idLabels");
+    map.getPane("idLabels").style.zIndex = "650";
+    map.getPane("idLabels").style.pointerEvents = "none";
+  }
   const labelGroup = L.layerGroup().addTo(map);
   const measureCanvas = document.createElement("canvas");
   const measureCtx = measureCanvas.getContext("2d");
@@ -350,6 +355,7 @@
       const marker = L.marker(candidates[i].latlng, {
         interactive: false,
         keyboard: false,
+        pane: "idLabels",
         zIndexOffset: 500,
         icon: L.divIcon({
           className: "map-id-label-wrap",
@@ -1019,7 +1025,33 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=15").catch(() => {});
+  }
+
+  const standalone = window.matchMedia("(display-mode: standalone)").matches ||
+    window.navigator.standalone === true;
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  if (isIOS && $("ios-help")) $("ios-help").hidden = false;
+
+  if ($("btn-refresh-app")) {
+    $("btn-refresh-app").addEventListener("click", async () => {
+      try {
+        if ("serviceWorker" in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map((r) => r.unregister()));
+        }
+        if (window.caches) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map((k) => caches.delete(k)));
+        }
+      } catch (_) {}
+      location.reload();
+    });
+  }
+
+  if (standalone && isIOS) {
+    setStatus("iPhone Home Screen mode may block file picking. Open this page in Safari to load a .gpkg.", "warn");
   }
 
   setStatus("Ready. Open a .gpkg file to begin. Completely local — files never leave this device.", "ok");

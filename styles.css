@@ -61,6 +61,27 @@ body.table-collapsed {
   box-shadow: 0 0 0 3px rgba(91,140,255,0.15);
 }
 .brand small { display: block; font-weight: 500; color: var(--muted); font-size: 11px; letter-spacing: 0.04em; }
+.ver {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #243056;
+  color: #9eb6ff;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+.ios-help {
+  margin: 0 12px 10px;
+  padding: 8px 10px;
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  border-radius: 8px;
+  color: #fde68a;
+  font-size: 12px;
+}
+label.btn { display: inline-flex; align-items: center; justify-content: center; }
 .spacer { flex: 1; }
 .topbar label.inline { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
 select, button, input[type="file"] {

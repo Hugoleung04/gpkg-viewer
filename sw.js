@@ -1,6 +1,5 @@
-const CACHE = "gpkg-viewer-v2";
+const CACHE = "gpkg-viewer-v15";
 const ASSETS = [
-  "./",
   "./index.html",
   "./styles.css",
   "./app.js",
@@ -30,16 +29,31 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
-  event.respondWith(
-    caches.match(req).then((cached) => {
-      if (cached) return cached;
-      return fetch(req).then((res) => {
-        if (res && res.ok && new URL(req.url).origin === location.origin) {
+  const url = new URL(req.url);
+  if (url.origin !== location.origin) return;
+
+  // Always try the network first for app files so updates actually appear.
+  const isAppFile = /\.(html|js|css|json)$/.test(url.pathname) || url.pathname.endsWith("/");
+  if (isAppFile) {
+    event.respondWith(
+      fetch(req).then((res) => {
+        if (res && res.ok) {
           const copy = res.clone();
           caches.open(CACHE).then((cache) => cache.put(req, copy));
         }
         return res;
-      }).catch(() => cached);
-    })
+      }).catch(() => caches.match(req))
+    );
+    return;
+  }
+
+  event.respondWith(
+    caches.match(req).then((cached) => cached || fetch(req).then((res) => {
+      if (res && res.ok) {
+        const copy = res.clone();
+        caches.open(CACHE).then((cache) => cache.put(req, copy));
+      }
+      return res;
+    }))
   );
 });
