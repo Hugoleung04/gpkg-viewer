@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Offline GeoPackage Viewer</title>
+  <link rel="stylesheet" href="vendor/leaflet.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo" aria-hidden="true"></div>
+      <div>
+        Offline GeoPackage Viewer
+        <small>Local .gpkg inspector — files stay on this computer</small>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn btn-primary" id="btn-open" type="button">Open .gpkg</button>
+    <button class="btn" id="btn-fit" type="button">Fit all</button>
+    <button class="btn" id="btn-clear" type="button">Clear</button>
+    <label class="inline">Basemap
+      <select id="basemap">
+        <option value="blank" selected>Blank (fully offline)</option>
+        <option value="osm">OpenStreetMap (needs internet)</option>
+        <option value="esri">Satellite (needs internet)</option>
+        <option value="carto">Carto Dark (needs internet)</option>
+      </select>
+    </label>
+    <label class="inline">
+      <input type="checkbox" id="show-labels" checked />
+      Show IDs
+    </label>
+    <label class="inline">Label field
+      <select id="label-field">
+        <option value="">(auto)</option>
+      </select>
+    </label>
+    <label class="inline">Feature cap
+      <select id="limit">
+        <option value="5000">5,000</option>
+        <option value="25000" selected>25,000</option>
+        <option value="100000">100,000</option>
+        <option value="500000">500,000</option>
+      </select>
+    </label>
+  </header>
+
+  <aside class="sidebar">
+    <div class="dropzone" id="dropzone">
+      <strong>Drop GeoPackage files here</strong>
+      <div class="hint">or click Open. Multiple .gpkg files supported.</div>
+    </div>
+    <div class="file-list" id="file-list">
+      <p class="empty-hint">No files loaded yet.</p>
+    </div>
+    <div class="sidebar-foot" id="stats"></div>
+  </aside>
+
+  <div id="map"></div>
+  <div class="status" id="status">Starting…</div>
+
+  <section class="table-panel">
+    <div class="table-bar">
+      <button class="btn btn-ghost" id="btn-toggle-table" type="button">▴ / ▾</button>
+      <strong id="table-title">Attributes</strong>
+      <span style="color:var(--muted);font-size:12px">Click a layer to inspect · double-click a layer to zoom</span>
+    </div>
+    <div class="table-wrap" id="table-wrap">
+      <p class="empty-hint">Select a vector layer to inspect attributes.</p>
+    </div>
+  </section>
+
+  <input id="file-input" type="file" accept=".gpkg,application/geopackage+sqlite3" multiple hidden />
+
+  <script src="vendor/leaflet.js"></script>
+  <script src="vendor/geopackage.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
