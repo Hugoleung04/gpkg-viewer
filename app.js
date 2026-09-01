@@ -19,8 +19,25 @@
     featureLimit: MAX_FEATURES_DEFAULT,
     showLabels: true,
     labelField: "",
-    labelMinZoom: 0
+    labelMinZoom: 0,
+    markerSize: 4,
+    labelSize: 9
   };
+
+  try {
+    const saved = JSON.parse(localStorage.getItem("gpkg-viewer-sizes") || "null");
+    if (saved && saved.markerSize) state.markerSize = saved.markerSize;
+    if (saved && saved.labelSize) state.labelSize = saved.labelSize;
+  } catch (_) {}
+
+  function persistSizes() {
+    try {
+      localStorage.setItem("gpkg-viewer-sizes", JSON.stringify({
+        markerSize: state.markerSize,
+        labelSize: state.labelSize
+      }));
+    } catch (_) {}
+  }
 
   const $ = (id) => document.getElementById(id);
 
@@ -149,22 +166,43 @@
 
   function styleFor(color, geomType) {
     const t = (geomType || "").toLowerCase();
+    const r = state.markerSize;
     if (t.includes("point")) {
       return {
-        radius: IS_TOUCH ? 9 : 6,
+        radius: r,
         color: "#0b1220",
-        weight: 1,
+        weight: r <= 3 ? 0.6 : 1,
         fillColor: color,
-        fillOpacity: 0.85
+        fillOpacity: 0.88
       };
     }
     return {
       color: color,
-      weight: t.includes("line") ? 2.2 : 1.4,
+      weight: t.includes("line") ? Math.max(1, r * 0.35) : Math.max(0.8, r * 0.25),
       opacity: 0.95,
       fillColor: color,
       fillOpacity: t.includes("line") ? 0 : 0.28
     };
+  }
+
+  function applyMarkerSize() {
+    state.files.forEach((f) => {
+      f.layers.forEach((ly) => {
+        if (ly.kind !== "feature" || !ly.leafletLayer) return;
+        ly.leafletLayer.eachLayer((l) => {
+          const st = styleFor(ly.color, ly.geomType);
+          if (typeof l.setRadius === "function") l.setRadius(st.radius);
+          if (typeof l.setStyle === "function") l.setStyle(st);
+        });
+      });
+    });
+  }
+
+  function applyLabelSize() {
+    document.documentElement.style.setProperty("--label-size", state.labelSize + "px");
+    measureCtx.font = "700 " + state.labelSize + 'px "Segoe UI","PingFang HK","Noto Sans TC",system-ui,sans-serif';
+    Object.keys(labelBoxCache).forEach((k) => { delete labelBoxCache[k]; });
+    scheduleLabelUpdate();
   }
 
   function pointToLayer(color) {
@@ -246,15 +284,16 @@
   const labelRoot = L.DomUtil.create("div", "id-label-root", labelPane);
   const measureCanvas = document.createElement("canvas");
   const measureCtx = measureCanvas.getContext("2d");
-  measureCtx.font = (IS_TOUCH ? "700 12px " : "700 11px ") + '"Segoe UI","PingFang HK","Noto Sans TC",system-ui,sans-serif';
+  measureCtx.font = "700 " + state.labelSize + 'px "Segoe UI","PingFang HK","Noto Sans TC",system-ui,sans-serif';
   const labelBoxCache = {};
   let labelUpdateTimer = null;
   let labelPool = [];
 
   function measureLabelBox(text) {
     if (labelBoxCache[text]) return labelBoxCache[text];
-    const w = Math.ceil(measureCtx.measureText(text).width) + 10;
-    const box = { w: w, h: 16 };
+    const padX = Math.max(6, Math.round(state.labelSize * 0.7));
+    const w = Math.ceil(measureCtx.measureText(text).width) + padX;
+    const box = { w: w, h: Math.round(state.labelSize + 6) };
     labelBoxCache[text] = box;
     return box;
   }
@@ -953,6 +992,23 @@
     state.showLabels = e.target.checked;
     applyAllLabels();
   });
+
+  function bindSizeSlider(id, key, valId, applyFn) {
+    const el = $(id);
+    const val = $(valId);
+    if (!el) return;
+    el.value = String(state[key]);
+    if (val) val.textContent = String(state[key]);
+    el.addEventListener("input", () => {
+      state[key] = parseInt(el.value, 10);
+      if (val) val.textContent = String(state[key]);
+      persistSizes();
+      applyFn();
+    });
+  }
+  bindSizeSlider("marker-size", "markerSize", "marker-size-val", applyMarkerSize);
+  bindSizeSlider("label-size", "labelSize", "label-size-val", applyLabelSize);
+  applyLabelSize();
 
   $("label-field").addEventListener("change", (e) => {
     state.labelField = e.target.value;

@@ -13,6 +13,7 @@
   --err: #f87171;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
   --radius: 12px;
+  --label-size: 9px;
   font-family: "Segoe UI", "PingFang HK", "Noto Sans TC", "Noto Sans SC", system-ui, sans-serif;
 }
 
@@ -106,7 +107,8 @@ select, .btn {
   gap: 8px;
 }
 .field { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
-.field select { width: 100%; }
+.field select, .field input[type="range"] { width: 100%; }
+.field input[type="range"] { min-height: 24px; accent-color: var(--accent); }
 .field.check { flex-direction: row; align-items: center; gap: 8px; font-size: 13px; color: var(--text); }
 .btn.full { width: 100%; }
 .table-hint { color: var(--muted); font-size: 12px; }
@@ -219,12 +221,12 @@ select, .btn {
   background: rgba(255, 255, 255, 0.94);
   color: #0f172a;
   border: 1px solid rgba(15, 23, 42, 0.25);
-  border-radius: 4px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.28);
-  padding: 1px 5px;
-  font-size: 11px;
+  border-radius: 3px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+  padding: 0 3px;
+  font-size: var(--label-size);
   font-weight: 700;
-  line-height: 14px;
+  line-height: calc(var(--label-size) + 4px);
   white-space: nowrap;
   will-change: transform;
 }
@@ -345,7 +347,7 @@ body.table-collapsed .status { bottom: 56px; }
   body:not(.table-collapsed) .status { bottom: calc(42vh + 12px); }
 
   .table-panel { padding-bottom: env(safe-area-inset-bottom); }
-  .map-id-label { font-size: 12px; padding: 2px 6px; }
+  .map-id-label { padding: 0 3px; }
 }
 
 @media (max-width: 860px) and (orientation: landscape) {
