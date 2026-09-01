@@ -178,6 +178,11 @@ select, .btn {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 20px;
 }
 .sidebar-head {
   align-items: center;
@@ -262,8 +267,8 @@ select, .btn {
 .dropzone .hint { font-size: 12px; }
 
 .file-list {
-  flex: 1;
-  overflow: auto;
+  flex: 0 0 auto;
+  overflow: visible;
   padding: 0 12px 12px;
 }
 .empty-hint { color: var(--muted); font-size: 13px; padding: 8px; }
@@ -428,10 +433,11 @@ table.attr tbody tr:hover { background: rgba(91,140,255,0.08); }
 
 .status {
   position: absolute;
-  left: 12px;
+  left: auto;
+  right: 56px;
   bottom: 12px;
   z-index: 500;
-  max-width: min(520px, calc(100% - 24px));
+  max-width: min(420px, calc(100% - 72px));
   background: rgba(17, 24, 39, 0.92);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -483,7 +489,9 @@ body.table-collapsed .status { bottom: 56px; }
     transition: transform 0.22s ease;
     box-shadow: var(--shadow);
     padding-top: env(safe-area-inset-top);
-    padding-bottom: env(safe-area-inset-bottom);
+    padding-bottom: calc(20px + env(safe-area-inset-bottom));
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
   body.menu-open .sidebar { transform: translateX(0); }
   .backdrop {

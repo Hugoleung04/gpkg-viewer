@@ -205,10 +205,13 @@
   }
 
   function applyMarkerRadii() {
+    const r = currentMarkerRadius();
     state.files.forEach((f) => {
       f.layers.forEach((ly) => {
         if (ly.kind !== "feature" || !ly.leafletLayer) return;
-        ly.leafletLayer.eachLayer((l) => applyFeatureStyle(l, ly));
+        ly.leafletLayer.eachLayer((l) => {
+          if (typeof l.setRadius === "function") l.setRadius(r);
+        });
       });
     });
   }
@@ -1404,12 +1407,15 @@
     applyAllLabels();
   });
 
-  map.on("zoom", applyMarkerRadii);
+  let zoomSizeTimer = null;
   map.on("zoomend", function () {
-    applyMarkerRadii();
-    applyAllLabels();
+    if (zoomSizeTimer) clearTimeout(zoomSizeTimer);
+    zoomSizeTimer = setTimeout(function () {
+      applyMarkerRadii();
+      if (!IS_TOUCH) applyAllLabels();
+    }, IS_TOUCH ? 80 : 0);
   });
-  map.on("moveend zoomend resize", scheduleLabelUpdate);
+  map.on("moveend resize", scheduleLabelUpdate);
 
   // Keyboard
   document.addEventListener("keydown", (e) => {
@@ -1423,7 +1429,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=25").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=27").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
