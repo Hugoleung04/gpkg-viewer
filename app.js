@@ -18,6 +18,8 @@
     selectedMarker: null,
     moveMode: false,
     basemap: null,
+    importedBasemaps: [],
+    activeImportedId: null,
     featureLimit: MAX_FEATURES_DEFAULT,
     showLabels: true,
     labelField: "",
@@ -82,7 +84,7 @@
       state.offlineRoadFill = null;
     }
     const mapEl = document.getElementById("map");
-    if (mapEl) mapEl.style.background = (mode === "hk-osm-off" || mode === "imported-osm") ? "#aad3df" : "";
+    if (mapEl) mapEl.style.background = (mode === "hk-osm-off" || String(mode).indexOf("imp-") === 0) ? "#aad3df" : "";
     if (mode === "osm") {
       state.basemap = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 24,
@@ -132,10 +134,13 @@
       state.basemap = L.layerGroup([base, labels]);
       state.basemap.addTo(map);
     } else if (mode === "hk-osm-off") {
+      state.activeImportedId = null;
       loadOfflineHkOsm("db", [[22.28536, 114.00084], [22.31340, 114.03096]], "Discovery Bay OSM extract");
-    } else if (mode === "imported-osm") {
-      if (state.importedOsmLayers) {
-        showOfflineOsmLayers(state.importedOsmLayers, state.importedOsmBounds, "Imported OSM");
+    } else if (String(mode).indexOf("imp-") === 0) {
+      const rec = (state.importedBasemaps || []).find((b) => b.id === mode);
+      if (rec) {
+        state.activeImportedId = rec.id;
+        showOfflineOsmLayers(rec.layers, rec.bounds, rec.name);
       }
     }
     // blank: no tiles
@@ -393,27 +398,103 @@
     };
   }
 
+  function defaultOsmName(fileName) {
+    return String(fileName || "Imported OSM").replace(/\.osm(\.xml)?$/i, "").replace(/[_\-]+/g, " ").trim() || "Imported OSM";
+  }
+
+  function refreshImportedBasemapUi() {
+    const sel = $("basemap");
+    if (sel) {
+      [...sel.querySelectorAll("option")].forEach((o) => {
+        if (String(o.value).indexOf("imp-") === 0) o.remove();
+      });
+      let group = sel.querySelector("#imported-basemap-group");
+      if (!state.importedBasemaps.length) {
+        if (group) group.remove();
+      } else {
+        if (!group) {
+          group = document.createElement("optgroup");
+          group.id = "imported-basemap-group";
+          group.label = "Imported (can rename / delete)";
+          sel.appendChild(group);
+        }
+        group.innerHTML = "";
+        state.importedBasemaps.forEach((b) => {
+          const opt = document.createElement("option");
+          opt.value = b.id;
+          opt.textContent = b.name;
+          group.appendChild(opt);
+        });
+      }
+      if (state.activeImportedId) sel.value = state.activeImportedId;
+    }
+    const box = $("imported-basemap-list");
+    if (!box) return;
+    if (!state.importedBasemaps.length) {
+      box.innerHTML = "";
+      box.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = state.importedBasemaps.map((b) => {
+      const on = b.id === state.activeImportedId;
+      return '<div class="import-row' + (on ? " on" : "") + '" data-id="' + escapeHtml(b.id) + '">' +
+        '<span class="import-name" title="' + escapeHtml(b.name) + '">' + escapeHtml(b.name) + (on ? " (in use)" : "") + "</span>" +
+        '<button type="button" class="btn" data-act="use">Use</button>' +
+        '<button type="button" class="btn" data-act="rename">Rename</button>' +
+        '<button type="button" class="btn danger-ghost" data-act="delete">Delete</button>' +
+        "</div>";
+    }).join("");
+  }
+
+  function renameImportedBasemap(id) {
+    const rec = state.importedBasemaps.find((b) => b.id === id);
+    if (!rec) return;
+    const next = window.prompt("New name for this imported basemap:", rec.name);
+    if (next == null) return;
+    const name = String(next).trim();
+    if (!name) {
+      setStatus("Name cannot be empty.", "warn");
+      return;
+    }
+    rec.name = name;
+    refreshImportedBasemapUi();
+    setStatus("Renamed imported basemap to “" + name + "”.", "ok");
+  }
+
+  function deleteImportedBasemap(id) {
+    const rec = state.importedBasemaps.find((b) => b.id === id);
+    if (!rec) return;
+    if (!window.confirm("Delete imported basemap “" + rec.name + "”? Built-in maps are not affected.")) return;
+    state.importedBasemaps = state.importedBasemaps.filter((b) => b.id !== id);
+    if (state.activeImportedId === id) {
+      state.activeImportedId = null;
+      const sel = $("basemap");
+      if (sel) sel.value = "blank";
+      setBasemap("blank");
+    }
+    refreshImportedBasemapUi();
+    setStatus("Deleted imported basemap “" + rec.name + "”.", "ok");
+  }
+
   async function openOsmBasemap(file) {
     setStatus("Reading " + file.name + "…", "");
     const text = await file.text();
     const parsed = parseOsmXml(text);
-    state.importedOsmLayers = parsed.layers;
-    state.importedOsmBounds = parsed.bounds;
+    const rec = {
+      id: "imp-" + Date.now() + "-" + Math.floor(Math.random() * 1000),
+      name: defaultOsmName(file.name),
+      layers: parsed.layers,
+      bounds: parsed.bounds
+    };
+    state.importedBasemaps.push(rec);
+    state.activeImportedId = rec.id;
+    refreshImportedBasemapUi();
     const sel = $("basemap");
-    if (sel) {
-      if (![...sel.options].some((o) => o.value === "imported-osm")) {
-        const opt = document.createElement("option");
-        opt.value = "imported-osm";
-        opt.textContent = "Imported OSM (offline)";
-        const after = sel.querySelector('option[value="hk-osm-off"]');
-        if (after && after.nextSibling) sel.insertBefore(opt, after.nextSibling);
-        else sel.appendChild(opt);
-      }
-      sel.value = "imported-osm";
-    }
+    if (sel) sel.value = rec.id;
     const mapEl = document.getElementById("map");
     if (mapEl) mapEl.style.background = "#aad3df";
-    showOfflineOsmLayers(parsed.layers, parsed.bounds, file.name);
+    showOfflineOsmLayers(rec.layers, rec.bounds, rec.name);
   }
 
   setBasemap("blank");
@@ -1555,6 +1636,24 @@
       if (f) openOsmBasemap(f);
     });
   }
+  if ($("imported-basemap-list")) {
+    $("imported-basemap-list").addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-act]");
+      const row = e.target.closest(".import-row");
+      if (!btn || !row) return;
+      const id = row.getAttribute("data-id");
+      const act = btn.getAttribute("data-act");
+      if (act === "use") {
+        const sel = $("basemap");
+        if (sel) sel.value = id;
+        setBasemap(id);
+      } else if (act === "rename") {
+        renameImportedBasemap(id);
+      } else if (act === "delete") {
+        deleteImportedBasemap(id);
+      }
+    });
+  }
   if ($("btn-open-3d")) {
     $("btn-open-3d").addEventListener("click", () => {
       const c = map.getCenter();
@@ -1757,7 +1856,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=36").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=37").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
