@@ -822,6 +822,7 @@
     applyFeatureStyle(marker, ly);
     if (save) persistColorEdits();
     refreshEditPanel();
+    syncInspectChecks();
   }
 
   function selectMarker(marker) {
@@ -861,11 +862,55 @@
   let dragMoved = false;
   let touchHandledAt = 0;
 
+  const INSPECT_RED = "#ef4444";
+
+  function isInspectedColor(color) {
+    return String(color || "").toLowerCase() === INSPECT_RED;
+  }
+
   function markSpotRed(layer) {
     if (!layer) return;
-    paintSpot(layer, "#ef4444", true);
+    paintSpot(layer, INSPECT_RED, true);
     selectMarker(layer);
-    setStatus("Marked " + (labelText(layer.feature, state.labelField) || "spot") + " red and saved.", "ok");
+    setStatus("Marked " + (labelText(layer.feature, state.labelField) || "spot") + " inspected (red) and saved.", "ok");
+  }
+
+  function findMarkerForFeature(layer, feat) {
+    if (!layer || !layer.leafletLayer || !feat) return null;
+    let found = null;
+    layer.leafletLayer.eachLayer((l) => {
+      if (found || !l.feature) return;
+      if (l.feature === feat) {
+        found = l;
+        return;
+      }
+      const a = l.feature.properties || {};
+      const b = feat.properties || {};
+      if ((a._origKey && b._origKey && a._origKey === b._origKey) ||
+          (a["Tree ID"] && a["Tree ID"] === b["Tree ID"]) ||
+          (a.fid != null && a.fid === b.fid)) {
+        found = l;
+      }
+    });
+    return found;
+  }
+
+  function syncInspectChecks() {
+    const wrap = $("table-wrap");
+    if (!wrap) return;
+    wrap.querySelectorAll("input.inspect-ck").forEach((ck) => {
+      const on = ck.getAttribute("data-on") === "1";
+      const i = parseInt(ck.getAttribute("data-i"), 10);
+      const found = findLayer(state.selectedLayerKey);
+      const layer = found && found.layer;
+      const feat = layer && layer.features && layer.features[i];
+      const marker = feat ? findMarkerForFeature(layer, feat) : null;
+      const inspected = !!(marker && marker.feature && isInspectedColor((marker.feature.properties || {})._editColor)) ||
+        !!(feat && isInspectedColor((feat.properties || {})._editColor));
+      ck.checked = inspected;
+      const row = ck.closest("tr");
+      if (row) row.classList.toggle("inspected", inspected);
+    });
   }
 
   function nearestSpotAt(containerPoint) {
@@ -1447,17 +1492,25 @@
 
     const colsSet = new Set();
     layer.features.forEach((ft) => {
-      Object.keys(ft.properties || {}).forEach((k) => colsSet.add(k));
+      Object.keys(ft.properties || {}).forEach((k) => {
+        if (k && k.charAt(0) !== "_") colsSet.add(k);
+      });
     });
     const cols = Array.from(colsSet);
     const maxRows = Math.min(layer.features.length, 500);
 
-    let html = "<table class='attr'><thead><tr><th>#</th>";
+    let html = "<table class='attr'><thead><tr><th class='ck-col'>✓</th><th>#</th>";
     cols.forEach((c) => { html += "<th>" + escapeHtml(c) + "</th>"; });
     html += "</tr></thead><tbody>";
     for (let i = 0; i < maxRows; i++) {
-      const p = layer.features[i].properties || {};
-      html += "<tr>";
+      const feat = layer.features[i];
+      const p = feat.properties || {};
+      const marker = findMarkerForFeature(layer, feat);
+      const inspected = !!(marker && marker.feature && isInspectedColor((marker.feature.properties || {})._editColor)) ||
+        isInspectedColor(p._editColor);
+      html += "<tr class='" + (inspected ? "inspected" : "") + "'>";
+      html += "<td class='ck-col'><input type='checkbox' class='inspect-ck' data-i='" + i + "'" +
+        (inspected ? " checked" : "") + " /></td>";
       html += "<td>" + (i + 1) + "</td>";
       cols.forEach((c) => { html += "<td>" + escapeHtml(p[c]) + "</td>"; });
       html += "</tr>";
@@ -1467,6 +1520,31 @@
       html += '<p class="empty-hint">Showing first ' + maxRows + " rows in the table.</p>";
     }
     wrap.innerHTML = html;
+    wrap.onchange = function (e) {
+      const ck = e.target && e.target.classList && e.target.classList.contains("inspect-ck") ? e.target : null;
+      if (!ck) return;
+      const i = parseInt(ck.getAttribute("data-i"), 10);
+      const found = findLayer(state.selectedLayerKey);
+      const layer = found && found.layer;
+      if (!layer || !layer.features || !layer.features[i]) return;
+      const marker = findMarkerForFeature(layer, layer.features[i]);
+      if (!marker) {
+        setStatus("Could not find that tree on the map.", "warn");
+        ck.checked = false;
+        return;
+      }
+      if (ck.checked) {
+        paintSpot(marker, INSPECT_RED, true);
+        if (layer.features[i].properties) layer.features[i].properties._editColor = INSPECT_RED;
+        setStatus("Inspected " + (labelText(marker.feature, state.labelField) || "tree") + ".", "ok");
+      } else {
+        paintSpot(marker, null, true);
+        if (layer.features[i].properties) delete layer.features[i].properties._editColor;
+        setStatus("Cleared inspect mark for " + (labelText(marker.feature, state.labelField) || "tree") + ".", "ok");
+      }
+      const row = ck.closest("tr");
+      if (row) row.classList.toggle("inspected", ck.checked);
+    };
   }
 
   // ---------- Events ----------
@@ -1856,7 +1934,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=37").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=38").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||

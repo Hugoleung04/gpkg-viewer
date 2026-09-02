@@ -454,6 +454,19 @@ table.attr th, table.attr td {
 }
 table.attr th { position: sticky; top: 0; background: #1a2340; color: #c5d0e6; z-index: 1; }
 table.attr tbody tr:hover { background: rgba(91,140,255,0.08); }
+table.attr tbody tr.inspected { background: rgba(239,68,68,0.12); }
+table.attr th.ck-col, table.attr td.ck-col {
+  position: sticky;
+  left: 0;
+  width: 36px;
+  min-width: 36px;
+  text-align: center;
+  background: #1a2340;
+  z-index: 2;
+}
+table.attr td.ck-col { background: #12182b; }
+table.attr tbody tr.inspected td.ck-col { background: #3a1d24; }
+.inspect-ck { width: 18px; height: 18px; accent-color: #ef4444; }
 
 .status {
   position: absolute;
