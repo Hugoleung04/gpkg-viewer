@@ -82,7 +82,7 @@
       state.offlineRoadFill = null;
     }
     const mapEl = document.getElementById("map");
-    if (mapEl) mapEl.style.background = mode === "hk-osm-off" ? "#aad3df" : "";
+    if (mapEl) mapEl.style.background = (mode === "hk-osm-off" || mode === "imported-osm") ? "#aad3df" : "";
     if (mode === "osm") {
       state.basemap = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 24,
@@ -132,7 +132,11 @@
       state.basemap = L.layerGroup([base, labels]);
       state.basemap.addTo(map);
     } else if (mode === "hk-osm-off") {
-      loadOfflineHkOsm();
+      loadOfflineHkOsm("db", [[22.28536, 114.00084], [22.31340, 114.03096]], "Discovery Bay OSM extract");
+    } else if (mode === "imported-osm") {
+      if (state.importedOsmLayers) {
+        showOfflineOsmLayers(state.importedOsmLayers, state.importedOsmBounds, "Imported OSM");
+      }
     }
     // blank: no tiles
   }
@@ -148,8 +152,12 @@
     return JSON.parse(await new Response(stream).text());
   }
 
-  async function loadOfflineHkOsm() {
-    setStatus("Loading offline OSM extract…", "");
+  function emptyFc() {
+    return { type: "FeatureCollection", features: [] };
+  }
+
+  function showOfflineOsmLayers(layers, fitBounds, label) {
+    setStatus("Drawing " + (label || "OSM") + "…", "");
     if (!map.getPane("offlineBase")) {
       map.createPane("offlineBase");
       map.getPane("offlineBase").style.zIndex = "250";
@@ -175,7 +183,7 @@
       return casing ? { color: "#ccc", weight: 2 * s, opacity: 1 } : { color: "#fff", weight: 1 * s, opacity: 1 };
     };
     try {
-      const land = await gunzipJson("offline/hk-landuse.json.gz");
+      const land = layers.land || emptyFc();
       group.addLayer(L.geoJSON(land, {
         renderer: renderer,
         interactive: false,
@@ -190,31 +198,31 @@
           return { color: "#ccc", weight: 0, fillColor: "#e8e4d8", fillOpacity: 0.7 };
         }
       }));
-      const water = await gunzipJson("offline/hk-water.json.gz");
+      const water = layers.water || emptyFc();
       group.addLayer(L.geoJSON(water, {
         renderer: renderer,
         interactive: false,
         style: { color: "#7eb4c7", weight: 0.4, fillColor: "#aad3df", fillOpacity: 1 }
       }));
-      const buildings = await gunzipJson("offline/hk-buildings.json.gz");
+      const buildings = layers.buildings || emptyFc();
       group.addLayer(L.geoJSON(buildings, {
         renderer: renderer,
         interactive: false,
         style: { color: "#c4b8a8", weight: 0.3, fillColor: "#d9d0c1", fillOpacity: 0.95 }
       }));
-      const waterways = await gunzipJson("offline/hk-waterways.json.gz");
+      const waterways = layers.waterways || emptyFc();
       group.addLayer(L.geoJSON(waterways, {
         renderer: renderer,
         interactive: false,
         style: { color: "#7eb4c7", weight: 1, opacity: 0.9 }
       }));
-      const rail = await gunzipJson("offline/hk-rail.json.gz");
+      const rail = layers.rail || emptyFc();
       group.addLayer(L.geoJSON(rail, {
         renderer: renderer,
         interactive: false,
         style: { color: "#707070", weight: 1.4, opacity: 0.9 }
       }));
-      const roads = await gunzipJson("offline/hk-roads.json.gz");
+      const roads = layers.roads || emptyFc();
       const roadCasing = L.geoJSON(roads, {
         renderer: renderer,
         interactive: false,
@@ -236,7 +244,7 @@
         state.offlineRoadFill.setStyle((feat) => roadStyle(feat, false));
       };
       map.on("zoomend", state._offRoadZoom);
-      const places = await gunzipJson("offline/hk-places.json.gz");
+      const places = layers.places || emptyFc();
       group.addLayer(L.geoJSON(places, {
         pane: "offlineBase",
         interactive: false,
@@ -254,12 +262,158 @@
       if (state.basemap) map.removeLayer(state.basemap);
       state.basemap = group;
       group.addTo(map);
-      map.fitBounds([[22.28536, 114.00084], [22.31340, 114.03096]], { padding: [20, 20], maxZoom: 16 });
-      setStatus("Offline OSM extract ready (Discovery Bay area). © OpenStreetMap contributors.", "ok");
+      if (fitBounds) map.fitBounds(fitBounds, { padding: [20, 20], maxZoom: 16 });
+      setStatus((label || "Offline OSM") + " ready. © OpenStreetMap contributors.", "ok");
     } catch (err) {
       console.error(err);
-      setStatus("Could not load offline HK map: " + (err && err.message ? err.message : err), "error");
+      setStatus("Could not draw OSM basemap: " + (err && err.message ? err.message : err), "error");
     }
+  }
+
+  async function loadOfflineHkOsm(prefix, fitBounds, label) {
+    prefix = prefix || "db";
+    setStatus("Loading offline " + (label || "OSM") + "…", "");
+    try {
+      const layers = {
+        land: await gunzipJson("offline/" + prefix + "-landuse.json.gz"),
+        water: await gunzipJson("offline/" + prefix + "-water.json.gz"),
+        buildings: await gunzipJson("offline/" + prefix + "-buildings.json.gz"),
+        waterways: await gunzipJson("offline/" + prefix + "-waterways.json.gz"),
+        rail: await gunzipJson("offline/" + prefix + "-rail.json.gz"),
+        roads: await gunzipJson("offline/" + prefix + "-roads.json.gz"),
+        places: await gunzipJson("offline/" + prefix + "-places.json.gz")
+      };
+      showOfflineOsmLayers(layers, fitBounds, label);
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not load offline OSM: " + (err && err.message ? err.message : err), "error");
+    }
+  }
+
+  function osmTags(el) {
+    const t = {};
+    const kids = el.getElementsByTagName("tag");
+    for (let i = 0; i < kids.length; i++) t[kids[i].getAttribute("k")] = kids[i].getAttribute("v");
+    return t;
+  }
+
+  function parseOsmXml(xmlText) {
+    const doc = new DOMParser().parseFromString(xmlText, "text/xml");
+    if (doc.getElementsByTagName("parsererror").length) throw new Error("Not a valid OSM XML file");
+    const nodes = {};
+    let minLat = 90, minLon = 180, maxLat = -90, maxLon = -180;
+    const nodeEls = doc.getElementsByTagName("node");
+    const places = [];
+    for (let i = 0; i < nodeEls.length; i++) {
+      const el = nodeEls[i];
+      const lat = parseFloat(el.getAttribute("lat"));
+      const lon = parseFloat(el.getAttribute("lon"));
+      if (!isFinite(lat) || !isFinite(lon)) continue;
+      nodes[el.getAttribute("id")] = [lon, lat];
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+      if (lon < minLon) minLon = lon;
+      if (lon > maxLon) maxLon = lon;
+      const tg = osmTags(el);
+      if (tg.name && (tg.place || tg.amenity || tg.tourism || tg.highway === "bus_stop")) {
+        places.push({ type: "Feature", properties: { n: tg.name, c: tg.place || tg.amenity || "" }, geometry: { type: "Point", coordinates: [Math.round(lon * 1e6) / 1e6, Math.round(lat * 1e6) / 1e6] } });
+      }
+    }
+    const boundsEl = doc.getElementsByTagName("bounds")[0];
+    if (boundsEl) {
+      minLat = parseFloat(boundsEl.getAttribute("minlat")) || minLat;
+      minLon = parseFloat(boundsEl.getAttribute("minlon")) || minLon;
+      maxLat = parseFloat(boundsEl.getAttribute("maxlat")) || maxLat;
+      maxLon = parseFloat(boundsEl.getAttribute("maxlon")) || maxLon;
+    }
+    function lineOf(refs) {
+      const pts = [];
+      let last = "";
+      for (let i = 0; i < refs.length; i++) {
+        const p = nodes[refs[i]];
+        if (!p) continue;
+        const key = p[0].toFixed(6) + "," + p[1].toFixed(6);
+        if (key === last) continue;
+        pts.push([Math.round(p[0] * 1e6) / 1e6, Math.round(p[1] * 1e6) / 1e6]);
+        last = key;
+      }
+      return pts;
+    }
+    const roads = [], buildings = [], water = [], waterways = [], land = [], rail = [];
+    const AREA_NAT = { water: 1, wood: 1, beach: 1, scrub: 1, grassland: 1, wetland: 1, bay: 1 };
+    const wayEls = doc.getElementsByTagName("way");
+    for (let i = 0; i < wayEls.length; i++) {
+      const el = wayEls[i];
+      const nds = el.getElementsByTagName("nd");
+      const refs = [];
+      for (let j = 0; j < nds.length; j++) refs.push(nds[j].getAttribute("ref"));
+      const tg = osmTags(el);
+      const pts = lineOf(refs);
+      if (pts.length < 2) continue;
+      if (tg.highway && tg.highway !== "bus_stop") {
+        roads.push({ type: "Feature", properties: { c: tg.highway, n: tg.name || "" }, geometry: { type: "LineString", coordinates: pts } });
+        continue;
+      }
+      if (tg.railway) {
+        rail.push({ type: "Feature", properties: { c: tg.railway }, geometry: { type: "LineString", coordinates: pts } });
+        continue;
+      }
+      if (tg.waterway && tg.waterway !== "riverbank") {
+        waterways.push({ type: "Feature", properties: { c: tg.waterway }, geometry: { type: "LineString", coordinates: pts } });
+        continue;
+      }
+      if (tg.natural === "coastline") {
+        waterways.push({ type: "Feature", properties: { c: "coastline" }, geometry: { type: "LineString", coordinates: pts } });
+        continue;
+      }
+      const closed = refs.length >= 4 && refs[0] === refs[refs.length - 1];
+      if (closed && (tg.building || tg.landuse || tg.leisure || AREA_NAT[tg.natural] || tg.area === "yes")) {
+        const ring = pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1] ? pts : pts.concat([pts[0]]);
+        if (ring.length < 4) continue;
+        const geom = { type: "Polygon", coordinates: [ring] };
+        if (tg.building) buildings.push({ type: "Feature", properties: {}, geometry: geom });
+        else if (tg.natural === "water" || tg.natural === "wetland" || tg.natural === "bay" || tg.leisure === "swimming_pool" || tg.leisure === "marina") {
+          water.push({ type: "Feature", properties: { c: tg.natural || tg.leisure }, geometry: geom });
+        } else {
+          land.push({ type: "Feature", properties: { c: tg.landuse || tg.natural || tg.leisure || "" }, geometry: geom });
+        }
+      }
+    }
+    return {
+      layers: {
+        land: { type: "FeatureCollection", features: land },
+        water: { type: "FeatureCollection", features: water },
+        buildings: { type: "FeatureCollection", features: buildings },
+        waterways: { type: "FeatureCollection", features: waterways },
+        rail: { type: "FeatureCollection", features: rail },
+        roads: { type: "FeatureCollection", features: roads },
+        places: { type: "FeatureCollection", features: places }
+      },
+      bounds: [[minLat, minLon], [maxLat, maxLon]]
+    };
+  }
+
+  async function openOsmBasemap(file) {
+    setStatus("Reading " + file.name + "…", "");
+    const text = await file.text();
+    const parsed = parseOsmXml(text);
+    state.importedOsmLayers = parsed.layers;
+    state.importedOsmBounds = parsed.bounds;
+    const sel = $("basemap");
+    if (sel) {
+      if (![...sel.options].some((o) => o.value === "imported-osm")) {
+        const opt = document.createElement("option");
+        opt.value = "imported-osm";
+        opt.textContent = "Imported OSM (offline)";
+        const after = sel.querySelector('option[value="hk-osm-off"]');
+        if (after && after.nextSibling) sel.insertBefore(opt, after.nextSibling);
+        else sel.appendChild(opt);
+      }
+      sel.value = "imported-osm";
+    }
+    const mapEl = document.getElementById("map");
+    if (mapEl) mapEl.style.background = "#aad3df";
+    showOfflineOsmLayers(parsed.layers, parsed.bounds, file.name);
   }
 
   setBasemap("blank");
@@ -1309,6 +1463,7 @@
 
   function openAnyFile(file) {
     const n = (file.name || "").toLowerCase();
+    if (n.endsWith(".osm") || n.endsWith(".osm.xml")) return openOsmBasemap(file);
     if (n.endsWith(".geojson") || n.endsWith(".json")) return openGeoJsonFile(file);
     return openGpkgFile(file);
   }
@@ -1323,6 +1478,7 @@
       const n = (f.name || "").toLowerCase();
       return n.endsWith(".gpkg") || n.endsWith(".gpkg.zip") || n.endsWith(".sqlite") ||
         n.endsWith(".db") || n.endsWith(".zip") || n.endsWith(".geojson") || n.endsWith(".json") ||
+        n.endsWith(".osm") || n.endsWith(".osm.xml") ||
         f.type === "application/geopackage+sqlite3" || f.type === "application/geo+json" ||
         f.type === "application/json";
     });
@@ -1391,6 +1547,14 @@
   });
 
   $("basemap").addEventListener("change", (e) => setBasemap(e.target.value));
+  if ($("btn-import-osm") && $("osm-input")) {
+    $("btn-import-osm").addEventListener("click", () => $("osm-input").click());
+    $("osm-input").addEventListener("change", (e) => {
+      const f = e.target.files && e.target.files[0];
+      e.target.value = "";
+      if (f) openOsmBasemap(f);
+    });
+  }
   if ($("btn-open-3d")) {
     $("btn-open-3d").addEventListener("click", () => {
       const c = map.getCenter();
@@ -1593,7 +1757,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=34").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=36").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||

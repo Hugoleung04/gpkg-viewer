@@ -1,4 +1,4 @@
-const CACHE = "gpkg-viewer-v34";
+const CACHE = "gpkg-viewer-v36";
 const ASSETS = [
   "./index.html",
   "./styles.css",
@@ -10,13 +10,13 @@ const ASSETS = [
   "./vendor/sql-wasm.wasm",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
-  "./offline/hk-roads.json.gz",
-  "./offline/hk-water.json.gz",
-  "./offline/hk-waterways.json.gz",
-  "./offline/hk-landuse.json.gz",
-  "./offline/hk-buildings.json.gz",
-  "./offline/hk-rail.json.gz",
-  "./offline/hk-places.json.gz"
+  "./offline/db-roads.json.gz",
+  "./offline/db-water.json.gz",
+  "./offline/db-waterways.json.gz",
+  "./offline/db-landuse.json.gz",
+  "./offline/db-buildings.json.gz",
+  "./offline/db-rail.json.gz",
+  "./offline/db-places.json.gz"
 ];
 
 self.addEventListener("install", (event) => {

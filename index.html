@@ -12,8 +12,8 @@
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="icon" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="vendor/leaflet.css?v=34" />
-  <link rel="stylesheet" href="styles.css?v=34" />
+  <link rel="stylesheet" href="vendor/leaflet.css?v=36" />
+  <link rel="stylesheet" href="styles.css?v=36" />
 </head>
 <body>
   <header class="topbar">
@@ -21,7 +21,7 @@
     <div class="brand">
       <div class="logo" aria-hidden="true"></div>
       <div>
-        GeoPackage Viewer <span class="ver">v1.24</span>
+        GeoPackage Viewer <span class="ver">v1.26</span>
         <small>Phone + computer — files stay on this device</small>
       </div>
     </div>
@@ -61,7 +61,7 @@
       <label class="field">Basemap
         <select id="basemap">
           <option value="blank" selected>Blank (offline)</option>
-          <option value="hk-osm-off">OSM extract (offline)</option>
+          <option value="hk-osm-off">Discovery Bay OSM (offline)</option>
           <option value="osm">OpenStreetMap</option>
           <option value="esri">Satellite</option>
           <option value="hk-imagery">HK Aerial (LandsD)</option>
@@ -69,6 +69,9 @@
           <option value="carto">Carto Dark</option>
         </select>
       </label>
+      <button class="btn full" id="btn-import-osm" type="button">Import OSM basemap</button>
+      <input id="osm-input" type="file" accept="*/*" hidden />
+      <div class="hint">Export a small area from openstreetmap.org → Export → then import that .osm here. After that, Open your tree GPKG.</div>
       <button class="btn full" id="btn-open-3d" type="button">Open 3D Map.gov.hk</button>
       <label class="field">Spot size <span id="marker-size-val">4</span>
         <input id="marker-size" type="range" min="2" max="12" step="1" value="4" />
@@ -139,8 +142,8 @@
     </div>
   </section>
 
-  <script src="vendor/leaflet.js?v=34"></script>
-  <script src="vendor/geopackage.min.js?v=34"></script>
-  <script src="app.js?v=34"></script>
+  <script src="vendor/leaflet.js?v=36"></script>
+  <script src="vendor/geopackage.min.js?v=36"></script>
+  <script src="app.js?v=36"></script>
 </body>
 </html>
