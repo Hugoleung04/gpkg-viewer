@@ -27,6 +27,8 @@
     markerSize: 4,
     labelSize: 9,
     labelFrame: true,
+    tableSortCol: "Tree ID",
+    tableSortDir: 1,
     markerZoomRef: null
   };
 
@@ -1497,12 +1499,46 @@
       });
     });
     const cols = Array.from(colsSet);
-    const maxRows = Math.min(layer.features.length, 500);
+    if (state.tableSortCol && cols.indexOf(state.tableSortCol) < 0) {
+      state.tableSortCol = cols.indexOf("Tree ID") >= 0 ? "Tree ID" : (cols[0] || "");
+    }
+    const sortSel = $("table-sort-col");
+    if (sortSel) {
+      sortSel.innerHTML = cols.map((c) => {
+        return "<option value=\"" + escapeHtml(c) + "\"" +
+          (c === state.tableSortCol ? " selected" : "") + ">" + escapeHtml(c) + "</option>";
+      }).join("");
+    }
+    const dirBtn = $("btn-sort-dir");
+    if (dirBtn) dirBtn.textContent = state.tableSortDir < 0 ? "Z→A" : "A→Z";
+
+    function sortVal(v) {
+      if (v == null || v === "") return "";
+      return String(v);
+    }
+    const idxs = layer.features.map((_, i) => i);
+    if (state.tableSortCol) {
+      const col = state.tableSortCol;
+      const dir = state.tableSortDir || 1;
+      idxs.sort((ia, ib) => {
+        const av = sortVal((layer.features[ia].properties || {})[col]);
+        const bv = sortVal((layer.features[ib].properties || {})[col]);
+        const cmp = av.localeCompare(bv, undefined, { numeric: true, sensitivity: "base" });
+        return dir * (cmp || (ia - ib));
+      });
+    }
+    const maxRows = Math.min(idxs.length, 500);
 
     let html = "<table class='attr'><thead><tr><th class='ck-col'>✓</th><th>#</th>";
-    cols.forEach((c) => { html += "<th>" + escapeHtml(c) + "</th>"; });
+    cols.forEach((c) => {
+      const on = c === state.tableSortCol;
+      const arrow = on ? (state.tableSortDir < 0 ? " ↓" : " ↑") : "";
+      html += "<th class='sortable" + (on ? " sorted" : "") + "' data-col=\"" + escapeHtml(c) + "\">" +
+        escapeHtml(c) + arrow + "</th>";
+    });
     html += "</tr></thead><tbody>";
-    for (let i = 0; i < maxRows; i++) {
+    for (let r = 0; r < maxRows; r++) {
+      const i = idxs[r];
       const feat = layer.features[i];
       const p = feat.properties || {};
       const marker = findMarkerForFeature(layer, feat);
@@ -1544,6 +1580,18 @@
       }
       const row = ck.closest("tr");
       if (row) row.classList.toggle("inspected", ck.checked);
+    };
+    wrap.onclick = function (e) {
+      const th = e.target && e.target.closest ? e.target.closest("th.sortable") : null;
+      if (!th) return;
+      const col = th.getAttribute("data-col");
+      if (!col) return;
+      if (state.tableSortCol === col) state.tableSortDir = -(state.tableSortDir || 1);
+      else {
+        state.tableSortCol = col;
+        state.tableSortDir = 1;
+      }
+      renderTable(layer);
     };
   }
 
@@ -1706,6 +1754,21 @@
   });
 
   $("basemap").addEventListener("change", (e) => setBasemap(e.target.value));
+  if ($("table-sort-col")) {
+    $("table-sort-col").addEventListener("change", (e) => {
+      state.tableSortCol = e.target.value;
+      state.tableSortDir = 1;
+      const found = findLayer(state.selectedLayerKey);
+      renderTable(found ? found.layer : null);
+    });
+  }
+  if ($("btn-sort-dir")) {
+    $("btn-sort-dir").addEventListener("click", () => {
+      state.tableSortDir = -(state.tableSortDir || 1);
+      const found = findLayer(state.selectedLayerKey);
+      renderTable(found ? found.layer : null);
+    });
+  }
   if ($("btn-import-osm") && $("osm-input")) {
     $("btn-import-osm").addEventListener("click", () => $("osm-input").click());
     $("osm-input").addEventListener("change", (e) => {
@@ -1934,7 +1997,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=38").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=39").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||

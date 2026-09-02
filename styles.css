@@ -441,6 +441,11 @@ select, .btn {
   font-size: 13px;
 }
 .table-bar strong { font-weight: 650; }
+.table-sort { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.table-sort select { max-width: 140px; }
+table.attr th.sortable { cursor: pointer; user-select: none; }
+table.attr th.sortable:hover { color: #fff; }
+table.attr th.sorted { color: #93c5fd; }
 .table-wrap { flex: 1; overflow: auto; }
 table.attr { border-collapse: collapse; width: max-content; min-width: 100%; font-size: 12px; }
 table.attr th, table.attr td {
