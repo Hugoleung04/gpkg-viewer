@@ -329,6 +329,15 @@ select, .btn {
     #0a0f1c;
 }
 .leaflet-container { background: #0a0f1c; font-family: inherit; touch-action: manipulation; }
+.offline-place {
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  color: #1f2937;
+  font-weight: 700;
+  font-size: 11px;
+  text-shadow: 0 0 3px #fff, 0 0 3px #fff, 1px 1px 0 #fff;
+}
 .leaflet-control-attribution { background: rgba(11,16,32,0.7) !important; color: #9aa8c2 !important; }
 .leaflet-control-attribution a { color: #c7d2fe !important; }
 .leaflet-popup-content-wrapper, .leaflet-popup-tip {

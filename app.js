@@ -75,6 +75,14 @@
       map.removeLayer(state.basemap);
       state.basemap = null;
     }
+    if (state._offRoadZoom) {
+      map.off("zoomend", state._offRoadZoom);
+      state._offRoadZoom = null;
+      state.offlineRoadCasing = null;
+      state.offlineRoadFill = null;
+    }
+    const mapEl = document.getElementById("map");
+    if (mapEl) mapEl.style.background = mode === "hk-osm-off" ? "#aad3df" : "";
     if (mode === "osm") {
       state.basemap = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 24,
@@ -102,8 +110,156 @@
         }
       );
       state.basemap.addTo(map);
+    } else if (mode === "hk-imagery" || mode === "hk-map") {
+      const attr = 'Map / Aerial Photograph from Lands Department';
+      const baseUrl = mode === "hk-imagery"
+        ? "https://mapapi.geodata.gov.hk/gs/api/v1.0.0/xyz/imagery/WGS84/{z}/{x}/{y}.png"
+        : "https://mapapi.geodata.gov.hk/gs/api/v1.0.0/xyz/basemap/WGS84/{z}/{x}/{y}.png";
+      const labelsUrl = "https://mapapi.geodata.gov.hk/gs/api/v1.0.0/xyz/label/hk/tc/WGS84/{z}/{x}/{y}.png";
+      const base = L.tileLayer(baseUrl, {
+        maxZoom: 24,
+        maxNativeZoom: 19,
+        attribution: attr
+      });
+      const labels = L.tileLayer(labelsUrl, {
+        maxZoom: 24,
+        maxNativeZoom: 19,
+        attribution: attr
+      });
+      base.on("tileerror", () => {
+        setStatus("Hong Kong map tiles failed. Check the network.", "warn");
+      });
+      state.basemap = L.layerGroup([base, labels]);
+      state.basemap.addTo(map);
+    } else if (mode === "hk-osm-off") {
+      loadOfflineHkOsm();
     }
     // blank: no tiles
+  }
+
+  async function gunzipJson(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Missing " + url);
+    const buf = await res.arrayBuffer();
+    if (typeof DecompressionStream === "undefined") {
+      throw new Error("This browser cannot read the packed map. Update Safari / Chrome.");
+    }
+    const stream = new Response(buf).body.pipeThrough(new DecompressionStream("gzip"));
+    return JSON.parse(await new Response(stream).text());
+  }
+
+  async function loadOfflineHkOsm() {
+    setStatus("Loading offline OSM extract…", "");
+    if (!map.getPane("offlineBase")) {
+      map.createPane("offlineBase");
+      map.getPane("offlineBase").style.zIndex = "250";
+      map.getPane("offlineBase").style.pointerEvents = "none";
+    }
+    const renderer = L.canvas({ pane: "offlineBase", padding: 0.4 });
+    const group = L.layerGroup();
+    const roadZoomScale = function () {
+      const z = map.getZoom();
+      return Math.max(0.75, Math.min(4.5, Math.pow(2, (z - 15) * 0.5)));
+    };
+    const roadStyle = function (feat, casing) {
+      const s = roadZoomScale();
+      const c = (feat.properties && feat.properties.c) || "";
+      if (c === "motorway" || c === "motorway_link") return casing ? { color: "#dc2a67", weight: 5 * s, opacity: 1 } : { color: "#e892a2", weight: 3.2 * s, opacity: 1 };
+      if (c === "trunk" || c === "trunk_link") return casing ? { color: "#c84e2f", weight: 4.5 * s, opacity: 1 } : { color: "#f9b29c", weight: 2.8 * s, opacity: 1 };
+      if (c === "primary" || c === "primary_link") return casing ? { color: "#a06b00", weight: 4 * s, opacity: 1 } : { color: "#fcd6a4", weight: 2.4 * s, opacity: 1 };
+      if (c === "secondary" || c === "secondary_link") return casing ? { color: "#707d05", weight: 3.6 * s, opacity: 1 } : { color: "#f7fabf", weight: 2.1 * s, opacity: 1 };
+      if (c === "tertiary" || c === "tertiary_link") return casing ? { color: "#8f8f8f", weight: 3.2 * s, opacity: 1 } : { color: "#ffffff", weight: 1.8 * s, opacity: 1 };
+      if (c === "residential" || c === "unclassified" || c === "living_street") return casing ? { color: "#8f8f8f", weight: 2.6 * s, opacity: 1 } : { color: "#ffffff", weight: 1.4 * s, opacity: 1 };
+      if (c === "service" || c === "pedestrian") return casing ? { color: "#b0b0b0", weight: 2 * s, opacity: 1 } : { color: "#ffffff", weight: 1.1 * s, opacity: 1 };
+      if (c === "footway" || c === "path" || c === "steps" || c === "cycleway") return casing ? { color: "#c97c5a", weight: 0, opacity: 0 } : { color: "#fa8072", weight: Math.max(1, 1.1 * s), opacity: 0.85, dashArray: "3,4" };
+      return casing ? { color: "#ccc", weight: 2 * s, opacity: 1 } : { color: "#fff", weight: 1 * s, opacity: 1 };
+    };
+    try {
+      const land = await gunzipJson("offline/hk-landuse.json.gz");
+      group.addLayer(L.geoJSON(land, {
+        renderer: renderer,
+        interactive: false,
+        style: (feat) => {
+          const c = (feat.properties && feat.properties.c) || "";
+          if (c === "forest" || c === "scrub" || c === "wood") return { color: "#9cba8e", weight: 0, fillColor: "#add19e", fillOpacity: 1 };
+          if (c === "park" || c === "recreation_ground" || c === "grass" || c === "pitch" || c === "playground" || c === "grassland") return { color: "#8fd18c", weight: 0, fillColor: "#c8facc", fillOpacity: 1 };
+          if (c === "beach") return { color: "#e8d9a0", weight: 0, fillColor: "#fff1ba", fillOpacity: 1 };
+          if (c === "residential") return { color: "#d4d4d4", weight: 0, fillColor: "#e0dfdf", fillOpacity: 1 };
+          if (c === "industrial" || c === "commercial" || c === "retail") return { color: "#e8dcd0", weight: 0, fillColor: "#ebd8c8", fillOpacity: 0.75 };
+          if (c === "farmland") return { color: "#e6e6c8", weight: 0, fillColor: "#eef0d5", fillOpacity: 0.8 };
+          return { color: "#ccc", weight: 0, fillColor: "#e8e4d8", fillOpacity: 0.7 };
+        }
+      }));
+      const water = await gunzipJson("offline/hk-water.json.gz");
+      group.addLayer(L.geoJSON(water, {
+        renderer: renderer,
+        interactive: false,
+        style: { color: "#7eb4c7", weight: 0.4, fillColor: "#aad3df", fillOpacity: 1 }
+      }));
+      const buildings = await gunzipJson("offline/hk-buildings.json.gz");
+      group.addLayer(L.geoJSON(buildings, {
+        renderer: renderer,
+        interactive: false,
+        style: { color: "#c4b8a8", weight: 0.3, fillColor: "#d9d0c1", fillOpacity: 0.95 }
+      }));
+      const waterways = await gunzipJson("offline/hk-waterways.json.gz");
+      group.addLayer(L.geoJSON(waterways, {
+        renderer: renderer,
+        interactive: false,
+        style: { color: "#7eb4c7", weight: 1, opacity: 0.9 }
+      }));
+      const rail = await gunzipJson("offline/hk-rail.json.gz");
+      group.addLayer(L.geoJSON(rail, {
+        renderer: renderer,
+        interactive: false,
+        style: { color: "#707070", weight: 1.4, opacity: 0.9 }
+      }));
+      const roads = await gunzipJson("offline/hk-roads.json.gz");
+      const roadCasing = L.geoJSON(roads, {
+        renderer: renderer,
+        interactive: false,
+        style: (feat) => roadStyle(feat, true)
+      });
+      const roadFill = L.geoJSON(roads, {
+        renderer: renderer,
+        interactive: false,
+        style: (feat) => roadStyle(feat, false)
+      });
+      group.addLayer(roadCasing);
+      group.addLayer(roadFill);
+      state.offlineRoadCasing = roadCasing;
+      state.offlineRoadFill = roadFill;
+      if (state._offRoadZoom) map.off("zoomend", state._offRoadZoom);
+      state._offRoadZoom = function () {
+        if (!state.offlineRoadCasing) return;
+        state.offlineRoadCasing.setStyle((feat) => roadStyle(feat, true));
+        state.offlineRoadFill.setStyle((feat) => roadStyle(feat, false));
+      };
+      map.on("zoomend", state._offRoadZoom);
+      const places = await gunzipJson("offline/hk-places.json.gz");
+      group.addLayer(L.geoJSON(places, {
+        pane: "offlineBase",
+        interactive: false,
+        pointToLayer: (feat, latlng) => L.circleMarker(latlng, {
+          radius: 0,
+          opacity: 0,
+          fillOpacity: 0,
+          renderer: renderer
+        }),
+        onEachFeature: (feat, layer) => {
+          const n = feat.properties && feat.properties.n;
+          if (n) layer.bindTooltip(n, { permanent: true, direction: "center", className: "offline-place", opacity: 0.9 });
+        }
+      }));
+      if (state.basemap) map.removeLayer(state.basemap);
+      state.basemap = group;
+      group.addTo(map);
+      map.fitBounds([[22.28536, 114.00084], [22.31340, 114.03096]], { padding: [20, 20], maxZoom: 16 });
+      setStatus("Offline OSM extract ready (Discovery Bay area). © OpenStreetMap contributors.", "ok");
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not load offline HK map: " + (err && err.message ? err.message : err), "error");
+    }
   }
 
   setBasemap("blank");
@@ -1235,6 +1391,14 @@
   });
 
   $("basemap").addEventListener("change", (e) => setBasemap(e.target.value));
+  if ($("btn-open-3d")) {
+    $("btn-open-3d").addEventListener("click", () => {
+      const c = map.getCenter();
+      const url = "https://3d.map.gov.hk/";
+      window.open(url, "_blank", "noopener");
+      setStatus("Opened 3d.map.gov.hk. Current view is " + c.lat.toFixed(5) + ", " + c.lng.toFixed(5) + ".", "ok");
+    });
+  }
 
   function collectEditedCollection() {
     const features = [];
@@ -1429,7 +1593,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=27").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=34").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||

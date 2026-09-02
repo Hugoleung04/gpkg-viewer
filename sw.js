@@ -1,4 +1,4 @@
-const CACHE = "gpkg-viewer-v27";
+const CACHE = "gpkg-viewer-v34";
 const ASSETS = [
   "./index.html",
   "./styles.css",
@@ -9,7 +9,14 @@ const ASSETS = [
   "./vendor/geopackage.min.js",
   "./vendor/sql-wasm.wasm",
   "./icons/icon-192.png",
-  "./icons/icon-512.png"
+  "./icons/icon-512.png",
+  "./offline/hk-roads.json.gz",
+  "./offline/hk-water.json.gz",
+  "./offline/hk-waterways.json.gz",
+  "./offline/hk-landuse.json.gz",
+  "./offline/hk-buildings.json.gz",
+  "./offline/hk-rail.json.gz",
+  "./offline/hk-places.json.gz"
 ];
 
 self.addEventListener("install", (event) => {
