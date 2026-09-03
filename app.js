@@ -2202,7 +2202,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=41").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=42").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||

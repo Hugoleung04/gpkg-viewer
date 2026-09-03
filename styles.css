@@ -18,7 +18,15 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text); }
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+  width: 100%;
+  max-width: 100%;
+}
 body {
   display: grid;
   grid-template-rows: 56px 1fr var(--table-h, 240px);
@@ -42,6 +50,8 @@ body.table-collapsed {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
+  overflow: hidden;
   padding: 0 16px;
   padding-top: env(safe-area-inset-top);
   background: linear-gradient(180deg, #182038, #12192b);
@@ -338,6 +348,7 @@ select, .btn {
 #map {
   position: relative;
   min-width: 0;
+  overflow: hidden;
   grid-area: map;
   background:
     radial-gradient(1200px 500px at 20% 0%, rgba(59,130,246,0.08), transparent 50%),
@@ -481,7 +492,12 @@ body.resizing-table { cursor: ns-resize; user-select: none; }
   font-size: 12px;
   padding: 4px 0;
 }
-.table-panel { position: relative; }
+.table-panel {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
 .table-bar strong { font-weight: 650; }
 .table-sort { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .table-sort select { max-width: 140px; }
@@ -500,7 +516,15 @@ table.attr td.editable input {
   padding: 4px 6px;
   font: inherit;
 }
-.table-wrap { flex: 1; overflow: auto; }
+.table-wrap {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x pan-y;
+}
 table.attr { border-collapse: collapse; width: max-content; min-width: 100%; font-size: 12px; }
 table.attr th, table.attr td {
   border-bottom: 1px solid var(--line);
@@ -554,20 +578,20 @@ body.table-collapsed .status { bottom: 12px; }
 .status.warn { color: var(--warn); }
 .status.error { color: var(--err); }
 
-@media (max-width: 860px) {
+@media (max-width: 1180px) {
   body {
     grid-template-columns: 1fr;
-    grid-template-rows: calc(52px + env(safe-area-inset-top)) 1fr 44px;
+    grid-template-rows: auto 1fr 44px;
     grid-template-areas:
       "top"
       "map"
       "table";
   }
   body.table-collapsed {
-    grid-template-rows: calc(52px + env(safe-area-inset-top)) 1fr 44px;
+    grid-template-rows: auto 1fr 44px;
   }
   body:not(.table-collapsed) {
-    grid-template-rows: calc(52px + env(safe-area-inset-top)) 1fr var(--table-h, 42vh);
+    grid-template-rows: auto 1fr var(--table-h, 42vh);
   }
   .desktop-only { display: none !important; }
   .mobile-only { display: block !important; }
@@ -575,8 +599,29 @@ body.table-collapsed .status { bottom: 12px; }
   #btn-menu { display: inline-flex; align-items: center; justify-content: center; }
   .sidebar-head.mobile-only { display: flex !important; }
   .brand small { display: none; }
-  .brand { font-size: 14px; min-width: 0; }
-  .topbar { padding: 0 10px; gap: 8px; }
+  .brand { font-size: 14px; min-width: 0; overflow: hidden; }
+  .spacer { display: none; }
+  .topbar {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    grid-template-areas:
+      "menu brand"
+      "acts acts";
+    align-items: center;
+    column-gap: 8px;
+    row-gap: 6px;
+    padding: 6px 10px;
+    padding-top: calc(6px + env(safe-area-inset-top));
+    overflow: hidden;
+  }
+  #btn-menu { grid-area: menu; }
+  .brand { grid-area: brand; }
+  .top-actions {
+    grid-area: acts;
+    width: 100%;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
   .btn, select { min-height: 40px; font-size: 14px; }
   .layer-row { padding: 10px 6px; }
   .leaflet-control-zoom a { width: 36px !important; height: 36px !important; line-height: 36px !important; }
@@ -621,8 +666,8 @@ body.table-collapsed .status { bottom: 12px; }
   .map-id-label { padding: 0 3px; }
 }
 
-@media (max-width: 860px) and (orientation: landscape) {
+@media (max-width: 1180px) and (orientation: landscape) {
   body:not(.table-collapsed) {
-    grid-template-rows: calc(48px + env(safe-area-inset-top)) 1fr var(--table-h, 36vh);
+    grid-template-rows: auto 1fr var(--table-h, 36vh);
   }
 }
