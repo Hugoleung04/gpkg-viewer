@@ -542,10 +542,18 @@
   }
 
   // ---------- UI helpers ----------
+  let statusTimer = null;
   function setStatus(msg, kind) {
     const el = $("status");
-    el.textContent = msg;
-    el.className = "status " + (kind || "");
+    if (!el) return;
+    el.hidden = false;
+    el.textContent = msg || "";
+    el.className = "status show " + (kind || "");
+    if (statusTimer) clearTimeout(statusTimer);
+    const ms = kind === "error" ? 6000 : 2800;
+    statusTimer = setTimeout(function () {
+      el.classList.remove("show");
+    }, ms);
   }
 
   function formatBytes(n) {
@@ -2194,7 +2202,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=40").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=41").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||

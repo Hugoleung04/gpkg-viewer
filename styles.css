@@ -541,8 +541,15 @@ table.attr tbody tr.inspected td.ck-col { background: #3a1d24; }
   font-size: 12px;
   color: var(--muted);
   pointer-events: none;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
 }
-body.table-collapsed .status { bottom: 56px; }
+.status.show {
+  opacity: 1;
+  transform: none;
+}
+body.table-collapsed .status { bottom: 12px; }
 .status.ok { color: var(--ok); }
 .status.warn { color: var(--warn); }
 .status.error { color: var(--err); }
@@ -604,11 +611,11 @@ body.table-collapsed .status { bottom: 56px; }
     left: 10px;
     right: 10px;
     top: auto;
-    bottom: calc(58px + env(safe-area-inset-bottom));
+    bottom: 10px;
     max-width: none;
   }
-  body.table-collapsed .status { bottom: calc(58px + env(safe-area-inset-bottom)); }
-  body:not(.table-collapsed) .status { bottom: calc(42vh + 12px); }
+  body.table-collapsed .status { bottom: 10px; }
+  body:not(.table-collapsed) .status { bottom: 10px; }
 
   .table-panel { padding-bottom: env(safe-area-inset-bottom); }
   .map-id-label { padding: 0 3px; }
