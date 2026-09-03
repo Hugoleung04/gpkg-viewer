@@ -29,6 +29,10 @@
     labelFrame: true,
     tableSortCol: "Tree ID",
     tableSortDir: 1,
+    hiddenCols: (function () {
+      try { return JSON.parse(localStorage.getItem("gpkg-viewer-hidden-cols") || "[]"); }
+      catch (_) { return []; }
+    })(),
     markerZoomRef: null
   };
 
@@ -782,7 +786,19 @@
               rec.lng = ll.lng;
             }
           }
-          if (rec.color || rec.lat != null) edits[featureKey(l, f.name)] = rec;
+          const props = l.feature.properties || {};
+          const orig = props._origProps;
+          if (orig) {
+            const changed = {};
+            Object.keys(props).forEach((k) => {
+              if (!k || k.charAt(0) === "_") return;
+              if (String(props[k] == null ? "" : props[k]) !== String(orig[k] == null ? "" : orig[k])) {
+                changed[k] = props[k];
+              }
+            });
+            if (Object.keys(changed).length) rec.props = changed;
+          }
+          if (rec.color || rec.lat != null || rec.props) edits[featureKey(l, f.name)] = rec;
         });
       });
     });
@@ -806,6 +822,13 @@
       const ll = marker.getLatLng();
       marker.feature.properties._origLatLng = [ll.lat, ll.lng];
     }
+    if (!marker.feature.properties._origProps) {
+      const snap = {};
+      Object.keys(marker.feature.properties).forEach((k) => {
+        if (k && k.charAt(0) !== "_") snap[k] = marker.feature.properties[k];
+      });
+      marker.feature.properties._origProps = snap;
+    }
     const raw = loadColorEdits()[marker.feature.properties._origKey];
     const saved = typeof raw === "string" ? { color: raw } : (raw || null);
     if (!saved) return;
@@ -813,6 +836,11 @@
     if (saved.lat != null && saved.lng != null && typeof marker.setLatLng === "function") {
       marker.setLatLng([saved.lat, saved.lng]);
       marker.feature.geometry = { type: "Point", coordinates: [saved.lng, saved.lat] };
+    }
+    if (saved.props && typeof saved.props === "object") {
+      Object.keys(saved.props).forEach((k) => {
+        marker.feature.properties[k] = saved.props[k];
+      });
     }
   }
   function paintSpot(marker, color, save) {
@@ -1498,7 +1526,10 @@
         if (k && k.charAt(0) !== "_") colsSet.add(k);
       });
     });
-    const cols = Array.from(colsSet);
+    const allCols = Array.from(colsSet);
+    const hidden = new Set(state.hiddenCols || []);
+    const cols = allCols.filter((c) => !hidden.has(c));
+    fillColumnMenu(allCols);
     if (state.tableSortCol && cols.indexOf(state.tableSortCol) < 0) {
       state.tableSortCol = cols.indexOf("Tree ID") >= 0 ? "Tree ID" : (cols[0] || "");
     }
@@ -1548,7 +1579,10 @@
       html += "<td class='ck-col'><input type='checkbox' class='inspect-ck' data-i='" + i + "'" +
         (inspected ? " checked" : "") + " /></td>";
       html += "<td>" + (i + 1) + "</td>";
-      cols.forEach((c) => { html += "<td>" + escapeHtml(p[c]) + "</td>"; });
+      cols.forEach((c) => {
+        html += "<td class='editable' data-i='" + i + "' data-col=\"" + escapeHtml(c) + "\">" +
+          escapeHtml(p[c]) + "</td>";
+      });
       html += "</tr>";
     }
     html += "</tbody></table>";
@@ -1593,6 +1627,98 @@
       }
       renderTable(layer);
     };
+    wrap.ondblclick = function (e) {
+      const td = e.target && e.target.closest ? e.target.closest("td.editable") : null;
+      if (td) startCellEdit(td, layer);
+    };
+    let lastCellTap = { el: null, t: 0 };
+    wrap.addEventListener("touchend", function (e) {
+      const td = e.target && e.target.closest ? e.target.closest("td.editable") : null;
+      if (!td) return;
+      const now = Date.now();
+      if (lastCellTap.el === td && now - lastCellTap.t < 450) {
+        lastCellTap = { el: null, t: 0 };
+        e.preventDefault();
+        startCellEdit(td, layer);
+        return;
+      }
+      lastCellTap = { el: td, t: now };
+    }, { passive: false });
+  }
+
+  function fillColumnMenu(allCols) {
+    const menu = $("col-menu");
+    if (!menu) return;
+    const hidden = new Set(state.hiddenCols || []);
+    menu.innerHTML = "<div class='hint' style='margin:0 0 6px'>Show columns</div>" +
+      allCols.map((c) => {
+        return "<label><input type='checkbox' data-col=\"" + escapeHtml(c) + "\"" +
+          (hidden.has(c) ? "" : " checked") + "> " + escapeHtml(c) + "</label>";
+      }).join("");
+  }
+
+  function persistHiddenCols() {
+    try { localStorage.setItem("gpkg-viewer-hidden-cols", JSON.stringify(state.hiddenCols || [])); }
+    catch (_) {}
+  }
+
+  function startCellEdit(td, layer) {
+    if (!td || td.classList.contains("editing")) return;
+    const col = td.getAttribute("data-col");
+    const i = parseInt(td.getAttribute("data-i"), 10);
+    if (!col || !layer || !layer.features || !layer.features[i]) return;
+    const feat = layer.features[i];
+    const old = feat.properties && feat.properties[col] != null ? String(feat.properties[col]) : "";
+    td.classList.add("editing");
+    td.innerHTML = "<input type='text' />";
+    const inp = td.querySelector("input");
+    inp.value = old;
+    inp.focus();
+    inp.select();
+    function finish(ok) {
+      if (!td.classList.contains("editing")) return;
+      const text = inp.value;
+      td.classList.remove("editing");
+      if (!ok || text === old) {
+        td.textContent = old;
+        return;
+      }
+      applyCatalogValue(layer, i, col, text);
+      td.textContent = text;
+    }
+    inp.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") { ev.preventDefault(); finish(true); }
+      if (ev.key === "Escape") { ev.preventDefault(); finish(false); }
+    });
+    inp.addEventListener("blur", () => finish(true));
+  }
+
+  function applyCatalogValue(layer, i, col, text) {
+    const feat = layer.features[i];
+    if (!feat) return;
+    feat.properties = feat.properties || {};
+    if (!feat.properties._origProps) {
+      const snap = {};
+      Object.keys(feat.properties).forEach((k) => {
+        if (k && k.charAt(0) !== "_") snap[k] = feat.properties[k];
+      });
+      feat.properties._origProps = snap;
+    }
+    const orig = feat.properties._origProps ? feat.properties._origProps[col] : feat.properties[col];
+    let next = text;
+    if (typeof orig === "number") {
+      const n = Number(text);
+      if (Number.isFinite(n)) next = n;
+    }
+    feat.properties[col] = next;
+    const marker = findMarkerForFeature(layer, feat);
+    if (marker && marker.feature) {
+      marker.feature.properties = marker.feature.properties || {};
+      marker.feature.properties[col] = next;
+      if (col === state.labelField) bindFeatureLabel(marker);
+    }
+    persistColorEdits();
+    setStatus("Updated " + col + " and saved.", "ok");
   }
 
   // ---------- Events ----------
@@ -1905,6 +2031,77 @@
 
   if (IS_TOUCH) document.body.classList.add("is-touch", "table-collapsed");
 
+  (function setupTableResize() {
+    const savedH = parseInt(localStorage.getItem("gpkg-viewer-table-h") || "", 10);
+    if (savedH >= 90) document.documentElement.style.setProperty("--table-h", savedH + "px");
+    const grip = $("table-resizer");
+    if (!grip) return;
+    let startY = 0, startH = 0, dragging = false;
+    function heightNow() {
+      const panel = $("table-panel");
+      return panel ? panel.getBoundingClientRect().height : 240;
+    }
+    function applyH(h) {
+      const max = Math.max(160, Math.round(window.innerHeight * 0.78));
+      h = Math.max(90, Math.min(max, Math.round(h)));
+      document.documentElement.style.setProperty("--table-h", h + "px");
+      try { localStorage.setItem("gpkg-viewer-table-h", String(h)); } catch (_) {}
+      if (map && map.invalidateSize) map.invalidateSize();
+    }
+    function onMove(ev) {
+      if (!dragging) return;
+      const y = ev.touches ? ev.touches[0].clientY : ev.clientY;
+      applyH(startH + (startY - y));
+    }
+    function onUp() {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove("resizing-table");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onUp);
+    }
+    function onDown(ev) {
+      if (document.body.classList.contains("table-collapsed")) return;
+      dragging = true;
+      document.body.classList.remove("table-collapsed");
+      document.body.classList.add("resizing-table");
+      startY = ev.touches ? ev.touches[0].clientY : ev.clientY;
+      startH = heightNow();
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("touchmove", onMove, { passive: false });
+      window.addEventListener("touchend", onUp);
+      ev.preventDefault();
+    }
+    grip.addEventListener("pointerdown", onDown);
+    grip.addEventListener("touchstart", onDown, { passive: false });
+  })();
+  if ($("btn-cols") && $("col-menu")) {
+    $("btn-cols").addEventListener("click", (e) => {
+      e.stopPropagation();
+      $("col-menu").hidden = !$("col-menu").hidden;
+    });
+    $("col-menu").addEventListener("change", (e) => {
+      const ck = e.target;
+      if (!ck || !ck.getAttribute("data-col")) return;
+      const col = ck.getAttribute("data-col");
+      const hidden = new Set(state.hiddenCols || []);
+      if (ck.checked) hidden.delete(col);
+      else hidden.add(col);
+      state.hiddenCols = Array.from(hidden);
+      persistHiddenCols();
+      const found = findLayer(state.selectedLayerKey);
+      renderTable(found ? found.layer : null);
+      $("col-menu").hidden = false;
+    });
+    document.addEventListener("click", (e) => {
+      if ($("col-menu").hidden) return;
+      if (e.target.closest && (e.target.closest("#col-menu") || e.target.closest("#btn-cols"))) return;
+      $("col-menu").hidden = true;
+    });
+  }
   $("btn-toggle-table").addEventListener("click", () => {
     document.body.classList.toggle("table-collapsed");
     setTimeout(() => map.invalidateSize(), 220);
@@ -1997,7 +2194,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=39").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=40").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||

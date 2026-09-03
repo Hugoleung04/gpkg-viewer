@@ -12,8 +12,8 @@
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="icon" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="vendor/leaflet.css?v=39" />
-  <link rel="stylesheet" href="styles.css?v=39" />
+  <link rel="stylesheet" href="vendor/leaflet.css?v=40" />
+  <link rel="stylesheet" href="styles.css?v=40" />
 </head>
 <body>
   <header class="topbar">
@@ -21,7 +21,7 @@
     <div class="brand">
       <div class="logo" aria-hidden="true"></div>
       <div>
-        GeoPackage Viewer <span class="ver">v1.29</span>
+        GeoPackage Viewer <span class="ver">v1.30</span>
         <small>Phone + computer — files stay on this device</small>
       </div>
     </div>
@@ -133,6 +133,7 @@
   <div class="status" id="status">Starting…</div>
 
   <section class="table-panel" id="table-panel">
+    <div class="table-resizer" id="table-resizer" title="Drag to resize catalog"></div>
     <div class="table-bar">
       <button class="btn btn-ghost" id="btn-toggle-table" type="button">▴ / ▾</button>
       <strong id="table-title">Attributes</strong>
@@ -140,15 +141,17 @@
         <select id="table-sort-col"></select>
       </label>
       <button class="btn" id="btn-sort-dir" type="button">A→Z</button>
-      <span class="table-hint">Tap a column header to sort</span>
+      <button class="btn" id="btn-cols" type="button">Columns</button>
+      <span class="table-hint">Drag the bar above to resize · double-click a cell to edit</span>
     </div>
+    <div class="col-menu" id="col-menu" hidden></div>
     <div class="table-wrap" id="table-wrap">
       <p class="empty-hint">Select a vector layer to inspect attributes.</p>
     </div>
   </section>
 
-  <script src="vendor/leaflet.js?v=39"></script>
-  <script src="vendor/geopackage.min.js?v=39"></script>
-  <script src="app.js?v=39"></script>
+  <script src="vendor/leaflet.js?v=40"></script>
+  <script src="vendor/geopackage.min.js?v=40"></script>
+  <script src="app.js?v=40"></script>
 </body>
 </html>
