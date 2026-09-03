@@ -42,7 +42,15 @@ body {
   grid-area: map;
 }
 body.table-collapsed {
-  grid-template-rows: 56px 1fr 40px;
+  grid-template-rows: 56px 1fr 48px;
+}
+body.table-collapsed .table-wrap,
+body.table-collapsed .col-menu,
+body.table-collapsed .table-sort,
+body.table-collapsed #btn-sort-dir,
+body.table-collapsed #btn-cols,
+body.table-collapsed .table-hint {
+  display: none !important;
 }
 
 .topbar {
@@ -592,7 +600,7 @@ body.table-collapsed .status { bottom: 12px; }
       "table";
   }
   body.table-collapsed {
-    grid-template-rows: auto 1fr 44px;
+    grid-template-rows: auto 1fr 48px;
   }
   body:not(.table-collapsed) {
     grid-template-rows: auto 1fr var(--table-h, 42vh);

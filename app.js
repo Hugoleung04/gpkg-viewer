@@ -2080,9 +2080,8 @@
       window.removeEventListener("touchend", onUp);
     }
     function onDown(ev) {
-      if (document.body.classList.contains("table-collapsed")) return;
+      if (!isCatalogOpen()) setCatalogOpen(true);
       dragging = true;
-      document.body.classList.remove("table-collapsed");
       document.body.classList.add("resizing-table");
       startY = ev.touches ? ev.touches[0].clientY : ev.clientY;
       startH = heightNow();
@@ -2119,10 +2118,29 @@
       $("col-menu").hidden = true;
     });
   }
+  function isCatalogOpen() {
+    return !document.body.classList.contains("table-collapsed");
+  }
+  function setCatalogOpen(open) {
+    document.body.classList.toggle("table-collapsed", !open);
+    const btn = $("btn-toggle-table");
+    if (btn) btn.textContent = open ? "Close catalog" : "Open catalog";
+    const wrap = $("table-wrap");
+    if (!open) {
+      if (wrap) wrap.innerHTML = "";
+      if ($("col-menu")) $("col-menu").hidden = true;
+    } else {
+      const found = findLayer(state.selectedLayerKey);
+      renderTable(found ? found.layer : null);
+    }
+    setTimeout(function () {
+      if (map && map.invalidateSize) map.invalidateSize();
+    }, 60);
+  }
   $("btn-toggle-table").addEventListener("click", () => {
-    document.body.classList.toggle("table-collapsed");
-    setTimeout(() => map.invalidateSize(), 220);
+    setCatalogOpen(!isCatalogOpen());
   });
+  setCatalogOpen(isCatalogOpen());
 
   $("limit").addEventListener("change", (e) => {
     const v = parseInt(e.target.value, 10);
@@ -2195,6 +2213,8 @@
   }
   map.on("zoomstart", function () {
     setTooltipPaneHidden(true);
+    const wrap = $("table-wrap");
+    if (wrap && isCatalogOpen()) wrap.style.display = "none";
   });
   let zoomSizeTimer = null;
   map.on("zoomend", function () {
@@ -2202,6 +2222,8 @@
     zoomSizeTimer = setTimeout(function () {
       applyMarkerRadii();
       setTooltipPaneHidden(false);
+      const wrap = $("table-wrap");
+      if (wrap && isCatalogOpen()) wrap.style.display = "";
     }, IS_TOUCH ? 220 : 40);
   });
   map.on("moveend resize", scheduleLabelUpdate);
@@ -2218,7 +2240,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=43").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=44").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
