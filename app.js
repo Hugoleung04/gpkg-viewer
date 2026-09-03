@@ -155,6 +155,7 @@
         showOfflineOsmLayers(rec.layers, rec.bounds, rec.name);
       }
     }
+    try { localStorage.setItem("gpkg-viewer-basemap", mode || "blank"); } catch (_) {}
     // blank: no tiles
   }
 
@@ -486,16 +487,19 @@
       setBasemap("blank");
     }
     refreshImportedBasemapUi();
+    idbDelete(id);
     setStatus("Deleted imported basemap “" + rec.name + "”.", "ok");
   }
 
-  async function openOsmBasemap(file) {
+  async function openOsmBasemap(file, opts) {
+    opts = opts || {};
     setStatus("Reading " + file.name + "…", "");
-    const text = await file.text();
+    const buf = await file.arrayBuffer();
+    const text = new TextDecoder("utf-8").decode(buf);
     const parsed = parseOsmXml(text);
     const rec = {
-      id: "imp-" + Date.now() + "-" + Math.floor(Math.random() * 1000),
-      name: defaultOsmName(file.name),
+      id: opts.id || ("imp-" + Date.now() + "-" + Math.floor(Math.random() * 1000)),
+      name: opts.title || defaultOsmName(file.name),
       layers: parsed.layers,
       bounds: parsed.bounds
     };
@@ -507,6 +511,8 @@
     const mapEl = document.getElementById("map");
     if (mapEl) mapEl.style.background = "#aad3df";
     showOfflineOsmLayers(rec.layers, rec.bounds, rec.name);
+    if (!opts.fromStore) persistOpenedFile("osm", rec.id, file, { bytes: new Uint8Array(buf), title: rec.name });
+    try { localStorage.setItem("gpkg-viewer-basemap", rec.id); } catch (_) {}
   }
 
   setBasemap("blank");
@@ -577,6 +583,79 @@
 
   function layerKey(fileId, tableName) {
     return fileId + "::" + tableName;
+  }
+
+  const IDB_NAME = "gpkg-viewer-files";
+  const IDB_STORE = "files";
+  function idbOpen() {
+    return new Promise((resolve, reject) => {
+      if (!window.indexedDB) {
+        reject(new Error("no idb"));
+        return;
+      }
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = function () {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE, { keyPath: "id" });
+      };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error); };
+    });
+  }
+  async function idbPut(rec) {
+    const db = await idbOpen();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      tx.objectStore(IDB_STORE).put(rec);
+      tx.oncomplete = function () { resolve(); };
+      tx.onerror = function () { reject(tx.error); };
+    });
+  }
+  async function idbDelete(id) {
+    try {
+      const db = await idbOpen();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, "readwrite");
+        tx.objectStore(IDB_STORE).delete(id);
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { reject(tx.error); };
+      });
+    } catch (_) {}
+  }
+  async function idbClear() {
+    try {
+      const db = await idbOpen();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, "readwrite");
+        tx.objectStore(IDB_STORE).clear();
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { reject(tx.error); };
+      });
+    } catch (_) {}
+  }
+  async function idbAll() {
+    const db = await idbOpen();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readonly");
+      const req = tx.objectStore(IDB_STORE).getAll();
+      req.onsuccess = function () { resolve(req.result || []); };
+      req.onerror = function () { reject(req.error); };
+    });
+  }
+  async function persistOpenedFile(kind, id, file, extra) {
+    try {
+      const bytes = extra && extra.bytes ? extra.bytes : new Uint8Array(await file.arrayBuffer());
+      await idbPut({
+        id: id,
+        kind: kind,
+        name: file.name || (extra && extra.name) || "file",
+        title: extra && extra.title,
+        mime: file.type || "",
+        bytes: bytes
+      });
+    } catch (err) {
+      console.warn("Could not remember file", err);
+    }
   }
 
   function escapeHtml(s) {
@@ -1129,7 +1208,8 @@
   }
 
   // ---------- Load file ----------
-  async function openGpkgFile(file) {
+  async function openGpkgFile(file, opts) {
+    opts = opts || {};
     if (!bootLibrary()) return;
     setStatus("Opening " + file.name + " …", "");
     $("dropzone").classList.add("busy");
@@ -1139,7 +1219,7 @@
       const bytes = new Uint8Array(buf);
       const geoPackage = await openGeoPackageBytes(bytes);
 
-      const fileId = "f" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+      const fileId = opts.id || ("f" + Date.now() + "-" + Math.random().toString(36).slice(2, 7));
       const rec = {
         id: fileId,
         name: file.name,
@@ -1171,6 +1251,7 @@
 
       const nFeat = featureTables.length;
       const nTile = tileTables.length;
+      if (!opts.fromStore) persistOpenedFile("gpkg", fileId, file, { bytes: bytes });
       setStatus(
         "Loaded " + file.name + " — " + nFeat + " vector layer" + (nFeat === 1 ? "" : "s") +
           ", " + nTile + " tile layer" + (nTile === 1 ? "" : "s") + ".",
@@ -1187,6 +1268,99 @@
       $("dropzone").classList.remove("busy");
       if (IS_TOUCH) setMenuOpen(false);
     }
+  }
+
+  function looksLikeHkGrid(e, n) {
+    return e > 700000 && e < 900000 && n > 700000 && n < 900000;
+  }
+
+  function hk1980GridToWgs84(easting, northing) {
+    const a = 6378388.0;
+    const f = 1 / 297.0;
+    const e2 = 2 * f - f * f;
+    const lat0 = 22.3121333333333 * Math.PI / 180;
+    const lon0 = 114.178555555556 * Math.PI / 180;
+    const FE = 836694.05;
+    const FN = 819069.80;
+    const k0 = 1;
+    function mer(phi) {
+      const e4 = e2 * e2;
+      const e6 = e4 * e2;
+      const A0 = 1 - e2 / 4 - 3 * e4 / 64 - 5 * e6 / 256;
+      const A2 = (3 / 8) * (e2 + e4 / 4 + 15 * e6 / 128);
+      const A4 = (15 / 256) * (e4 + 3 * e6 / 4);
+      const A6 = 35 * e6 / 3072;
+      return a * (A0 * phi - A2 * Math.sin(2 * phi) + A4 * Math.sin(4 * phi) - A6 * Math.sin(6 * phi));
+    }
+    const E = easting - FE;
+    const N = northing - FN;
+    const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
+    const M = mer(lat0) + N / k0;
+    const mu = M / (a * (1 - e2 / 4 - 3 * e2 * e2 / 64 - 5 * e2 * e2 * e2 / 256));
+    const phi1 = mu
+      + (3 * e1 / 2 - 27 * e1 * e1 * e1 / 32) * Math.sin(2 * mu)
+      + (21 * e1 * e1 / 16 - 55 * Math.pow(e1, 4) / 32) * Math.sin(4 * mu)
+      + (151 * e1 * e1 * e1 / 96) * Math.sin(6 * mu);
+    const sinp = Math.sin(phi1);
+    const cosp = Math.cos(phi1);
+    const tanp = Math.tan(phi1);
+    const ep2 = e2 / (1 - e2);
+    const nu = a / Math.sqrt(1 - e2 * sinp * sinp);
+    const rho = a * (1 - e2) / Math.pow(1 - e2 * sinp * sinp, 1.5);
+    const T = tanp * tanp;
+    const C = ep2 * cosp * cosp;
+    const D = E / (nu * k0);
+    const phi = phi1 - (nu * tanp / rho) * (
+      D * D / 2
+      - (5 + 3 * T + 10 * C - 4 * C * C - 9 * ep2) * Math.pow(D, 4) / 24
+      + (61 + 90 * T + 298 * C + 45 * T * T - 252 * ep2 - 3 * C * C) * Math.pow(D, 6) / 720
+    );
+    const lam = lon0 + (
+      D
+      - (1 + 2 * T + C) * Math.pow(D, 3) / 6
+      + (5 - 2 * C + 28 * T - 3 * C * C + 8 * ep2 + 24 * T * T) * Math.pow(D, 5) / 120
+    ) / cosp;
+    const lat = phi * 180 / Math.PI - 5.5 / 3600;
+    const lon = lam * 180 / Math.PI + 8.8 / 3600;
+    return [lon, lat];
+  }
+
+  function findHkGridFields(props) {
+    const keys = Object.keys(props || {});
+    const eKey = keys.find((k) => /easting/i.test(k) && !/lat|lon|wgs/i.test(k));
+    const nKey = keys.find((k) => /northing/i.test(k) && !/lat|lon|wgs/i.test(k));
+    return { eKey: eKey || null, nKey: nKey || null };
+  }
+
+  function applyHk1980IfNeeded(features) {
+    if (!features || !features.length) return 0;
+    let n = 0;
+    features.forEach((ft) => {
+      const props = ft.properties || {};
+      const fields = findHkGridFields(props);
+      let e = null;
+      let nn = null;
+      if (fields.eKey && fields.nKey) {
+        e = parseFloat(props[fields.eKey]);
+        nn = parseFloat(props[fields.nKey]);
+      }
+      const g = ft.geometry;
+      if ((!isFinite(e) || !isFinite(nn) || !looksLikeHkGrid(e, nn)) && g && g.type === "Point" && g.coordinates) {
+        const x = g.coordinates[0];
+        const y = g.coordinates[1];
+        if (looksLikeHkGrid(x, y)) {
+          e = x;
+          nn = y;
+        }
+      }
+      if (!isFinite(e) || !isFinite(nn) || !looksLikeHkGrid(e, nn)) return;
+      const wgs = hk1980GridToWgs84(e, nn);
+      if (!g || g.type === "Point") {
+        ft.geometry = { type: "Point", coordinates: wgs };
+        n += 1;
+      }
+    });
+    return n;
   }
 
   function detectGeomType(features) {
@@ -1248,6 +1422,8 @@
       console.error("query features failed", tableName, e);
     }
 
+    const hkFixed = applyHk1980IfNeeded(features);
+    if (hkFixed) setStatus("Converted " + hkFixed + " spots from HK1980 Grid to WGS84.", "ok");
     if (!geomType) geomType = detectGeomType(features);
     const propKeys = collectPropertyKeys(features);
     if (propKeys.length) columns = propKeys;
@@ -1515,6 +1691,7 @@
     }
     refreshLabelFieldOptions();
     renderSidebar();
+    idbDelete(fileId);
     setStatus("Removed " + f.name + ".", "ok");
   }
 
@@ -1739,7 +1916,9 @@
   }
 
   // ---------- Events ----------
-  async function openGeoJsonFile(file) {
+  async function openGeoJsonFile(file, opts) {
+    opts = opts || {};
+    openGeoJsonFile._fromStore = !!opts.fromStore;
     setStatus("Opening " + file.name + " …", "");
     try {
       const text = await file.text();
@@ -1754,6 +1933,7 @@
       }
       features = features.filter((ft) => ft && ft.geometry);
       if (!features.length) throw new Error("No features in this GeoJSON file.");
+      applyHk1980IfNeeded(features);
 
       features.forEach((ft) => {
         const p = ft.properties || {};
@@ -1761,7 +1941,7 @@
         ft.properties = p;
       });
 
-      const fileId = "f" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+      const fileId = opts.id || ("f" + Date.now() + "-" + Math.random().toString(36).slice(2, 7));
       const rec = { id: fileId, name: file.name, size: file.size, geoPackage: null, layers: [] };
       const geomType = detectGeomType(features);
       const columns = collectPropertyKeys(features);
@@ -1804,6 +1984,7 @@
       if (leafletLayer.getBounds && leafletLayer.getBounds().isValid()) {
         map.fitBounds(leafletLayer.getBounds(), { padding: [28, 28], maxZoom: 16 });
       }
+      if (!openGeoJsonFile._fromStore) persistOpenedFile("geojson", rec.id, file);
       setStatus("Loaded " + file.name + " — " + features.length + " features.", "ok");
     } catch (err) {
       console.error(err);
@@ -2031,6 +2212,11 @@
 
   function clearAllFiles() {
     [...state.files].forEach((f) => removeFile(f.id));
+    [...state.importedBasemaps].forEach((b) => idbDelete(b.id));
+    state.importedBasemaps = [];
+    state.activeImportedId = null;
+    refreshImportedBasemapUi();
+    idbClear();
     setStatus("Cleared.", "");
   }
   $("btn-clear").addEventListener("click", clearAllFiles);
@@ -2240,7 +2426,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=44").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=46").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
@@ -2271,6 +2457,31 @@
 
   setStatus("Ready. Open a .gpkg file to begin. Completely local — files never leave this device.", "ok");
   bootLibrary();
+
+  (async function restoreSessionFiles() {
+    try {
+      const rows = await idbAll();
+      if (!rows.length) return;
+      setStatus("Restoring " + rows.length + " file" + (rows.length === 1 ? "" : "s") + " from last session…", "");
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const bytes = row.bytes;
+        const file = new File([bytes], row.name || "restored", { type: row.mime || "" });
+        if (row.kind === "osm") await openOsmBasemap(file, { fromStore: true, id: row.id, title: row.title });
+        else if (row.kind === "geojson") await openGeoJsonFile(file, { fromStore: true, id: row.id });
+        else await openGpkgFile(file, { fromStore: true, id: row.id });
+      }
+      const lastMap = localStorage.getItem("gpkg-viewer-basemap");
+      if (lastMap) {
+        const sel = $("basemap");
+        if (sel) sel.value = lastMap;
+        setBasemap(lastMap);
+      }
+      setStatus("Restored " + rows.length + " file" + (rows.length === 1 ? "" : "s") + " from last session.", "ok");
+    } catch (err) {
+      console.warn(err);
+    }
+  })();
 
   // Optional bundled sample: open with ?demo=1
   if (/\bdemo=1\b/.test(location.search)) {
