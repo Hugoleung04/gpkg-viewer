@@ -71,8 +71,14 @@
     zoomControl: true,
     tap: true,
     tapTolerance: 25,
-    bounceAtZoomLimits: false
+    bounceAtZoomLimits: false,
+    preferCanvas: true,
+    zoomAnimation: !IS_TOUCH,
+    fadeAnimation: !IS_TOUCH,
+    markerZoomAnimation: false,
+    inertiaDeceleration: 3000
   }).setView([22.3193, 114.1694], 11); // Hong Kong default
+  const markerRenderer = L.canvas({ padding: 0.6, tolerance: 4 });
   if (map.zoomControl) map.zoomControl.setPosition("topright");
   if (IS_TOUCH && map.doubleClickZoom) map.doubleClickZoom.disable();
 
@@ -250,11 +256,11 @@
       state.offlineRoadFill = roadFill;
       if (state._offRoadZoom) map.off("zoomend", state._offRoadZoom);
       state._offRoadZoom = function () {
-        if (!state.offlineRoadCasing) return;
+        if (!state.offlineRoadCasing || IS_TOUCH) return;
         state.offlineRoadCasing.setStyle((feat) => roadStyle(feat, true));
         state.offlineRoadFill.setStyle((feat) => roadStyle(feat, false));
       };
-      map.on("zoomend", state._offRoadZoom);
+      if (!IS_TOUCH) map.on("zoomend", state._offRoadZoom);
       const places = layers.places || emptyFc();
       group.addLayer(L.geoJSON(places, {
         pane: "offlineBase",
@@ -652,7 +658,10 @@
   function pointToLayer(color) {
     return function (feature, latlng) {
       const c = (feature.properties && feature.properties._editColor) || color;
-      return L.circleMarker(latlng, styleFor(c, "point"));
+      const opt = styleFor(c, "point");
+      opt.renderer = markerRenderer;
+      opt.interactive = true;
+      return L.circleMarker(latlng, opt);
     };
   }
 
@@ -2180,13 +2189,20 @@
     applyAllLabels();
   });
 
+  function setTooltipPaneHidden(hidden) {
+    const pane = map.getPane("tooltipPane");
+    if (pane) pane.style.visibility = hidden ? "hidden" : "";
+  }
+  map.on("zoomstart", function () {
+    setTooltipPaneHidden(true);
+  });
   let zoomSizeTimer = null;
   map.on("zoomend", function () {
     if (zoomSizeTimer) clearTimeout(zoomSizeTimer);
     zoomSizeTimer = setTimeout(function () {
       applyMarkerRadii();
-      if (!IS_TOUCH) applyAllLabels();
-    }, IS_TOUCH ? 80 : 0);
+      setTooltipPaneHidden(false);
+    }, IS_TOUCH ? 220 : 40);
   });
   map.on("moveend resize", scheduleLabelUpdate);
 
@@ -2202,7 +2218,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=42").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=43").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
