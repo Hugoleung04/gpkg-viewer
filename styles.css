@@ -517,6 +517,11 @@ table.attr th.sortable { cursor: pointer; user-select: none; }
 table.attr th.sortable:hover { color: #fff; }
 table.attr th.sorted { color: #93c5fd; }
 table.attr td.editable { cursor: text; }
+table.attr td.changed {
+  background: #facc15 !important;
+  color: #1f1400 !important;
+  font-weight: 700;
+}
 table.attr td.editable.editing { padding: 0 4px; }
 table.attr td.editable input {
   width: 100%;

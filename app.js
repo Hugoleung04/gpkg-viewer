@@ -1774,8 +1774,9 @@
         (inspected ? " checked" : "") + " /></td>";
       html += "<td>" + (i + 1) + "</td>";
       cols.forEach((c) => {
-        html += "<td class='editable' data-i='" + i + "' data-col=\"" + escapeHtml(c) + "\">" +
-          escapeHtml(p[c]) + "</td>";
+        const changed = isCatalogChanged(p, c);
+        html += "<td class='editable" + (changed ? " changed" : "") + "' data-i='" + i +
+          "' data-col=\"" + escapeHtml(c) + "\">" + escapeHtml(p[c]) + "</td>";
       });
       html += "</tr>";
     }
@@ -1879,12 +1880,20 @@
       }
       applyCatalogValue(layer, i, col, text);
       td.textContent = text;
+      td.classList.toggle("changed", isCatalogChanged(feat.properties, col));
     }
     inp.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter") { ev.preventDefault(); finish(true); }
       if (ev.key === "Escape") { ev.preventDefault(); finish(false); }
     });
     inp.addEventListener("blur", () => finish(true));
+  }
+
+  function isCatalogChanged(props, col) {
+    if (!props || !props._origProps) return false;
+    const a = props[col] == null ? "" : String(props[col]);
+    const b = props._origProps[col] == null ? "" : String(props._origProps[col]);
+    return a !== b;
   }
 
   function applyCatalogValue(layer, i, col, text) {
@@ -2426,7 +2435,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=46").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=47").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
