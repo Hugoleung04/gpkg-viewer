@@ -567,6 +567,13 @@ table.attr th.ck-col, table.attr td.ck-col {
 }
 table.attr td.ck-col { background: #12182b; }
 table.attr tbody tr.inspected td.ck-col { background: #3a1d24; }
+table.attr tbody tr { cursor: pointer; }
+table.attr tbody tr.selected-row td {
+  box-shadow: inset 0 0 0 9999px rgba(250, 204, 21, 0.16);
+}
+table.attr tbody tr.selected-row td:first-child {
+  box-shadow: inset 3px 0 0 #facc15, inset 0 0 0 9999px rgba(250, 204, 21, 0.16);
+}
 .inspect-ck { width: 18px; height: 18px; accent-color: #ef4444; }
 
 .status {

@@ -704,6 +704,7 @@
         });
       });
     });
+    if (state.selectedMarker) updateFocusRing(state.selectedMarker);
   }
 
   function applyMarkerSize() {
@@ -732,6 +733,7 @@
     }
     layer.setStyle(st);
     if (typeof layer.setRadius === "function") layer.setRadius(st.radius);
+    if (state.selectedMarker === layer) updateFocusRing(layer);
   }
 
   function pointToLayer(color) {
@@ -951,6 +953,76 @@
     syncInspectChecks();
   }
 
+  function updateFocusRing(marker) {
+    if (state.focusRing) {
+      map.removeLayer(state.focusRing);
+      state.focusRing = null;
+    }
+    if (!marker || typeof marker.getLatLng !== "function") return;
+    const r = Math.max(12, currentMarkerRadius() * 2.6);
+    state.focusRing = L.circleMarker(marker.getLatLng(), {
+      radius: r,
+      color: "#facc15",
+      weight: 3,
+      opacity: 1,
+      fillColor: "#facc15",
+      fillOpacity: 0.12,
+      interactive: false
+    });
+    state.focusRing.addTo(map);
+  }
+
+  function focusMarkerOnMap(marker) {
+    if (!marker) {
+      setStatus("Could not find that tree on the map.", "warn");
+      return;
+    }
+    selectMarker(marker);
+    if (typeof marker.getLatLng !== "function") return;
+    const ll = marker.getLatLng();
+    const wantZ = Math.max(map.getZoom(), 17);
+    const tight = map.getBounds() && map.getBounds().pad(-0.28);
+    if (tight && tight.contains(ll) && map.getZoom() >= 16) map.panTo(ll, { animate: !IS_TOUCH });
+    else map.setView(ll, wantZ, { animate: !IS_TOUCH });
+    updateFocusRing(marker);
+    const id = labelText(marker.feature, state.labelField) || "tree";
+    setStatus("Moved to " + id + ".", "ok");
+  }
+
+  function highlightCatalogRowByIndex(i) {
+    const wrap = $("table-wrap");
+    if (!wrap) return;
+    wrap.querySelectorAll("tr.selected-row").forEach((tr) => tr.classList.remove("selected-row"));
+    const tr = wrap.querySelector("tr[data-i='" + i + "']");
+    if (tr) {
+      tr.classList.add("selected-row");
+      tr.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
+
+  function highlightCatalogRowForMarker(marker) {
+    if (!marker || !marker.feature) return;
+    const ly = parentLayerOf(marker);
+    if (!ly || !ly.features) return;
+    let idx = -1;
+    for (let i = 0; i < ly.features.length; i++) {
+      if (ly.features[i] === marker.feature) { idx = i; break; }
+    }
+    if (idx < 0) {
+      const key = (marker.feature.properties || {})._origKey;
+      const fid = (marker.feature.properties || {}).fid;
+      const tid = (marker.feature.properties || {})["Tree ID"] || (marker.feature.properties || {}).tree_no;
+      for (let i = 0; i < ly.features.length; i++) {
+        const p = ly.features[i].properties || {};
+        if ((key && p._origKey === key) || (fid != null && p.fid === fid) || (tid && (p["Tree ID"] === tid || p.tree_no === tid))) {
+          idx = i;
+          break;
+        }
+      }
+    }
+    if (idx >= 0) highlightCatalogRowByIndex(idx);
+  }
+
   function selectMarker(marker) {
     const prev = state.selectedMarker;
     state.selectedMarker = marker || null;
@@ -961,6 +1033,10 @@
     if (state.selectedMarker) {
       const ly = parentLayerOf(state.selectedMarker);
       if (ly) applyFeatureStyle(state.selectedMarker, ly);
+      updateFocusRing(state.selectedMarker);
+    } else if (state.focusRing) {
+      map.removeLayer(state.focusRing);
+      state.focusRing = null;
     }
     refreshEditPanel();
   }
@@ -1073,6 +1149,7 @@
     }
     lastTap = { layer: layer, t: now };
     selectMarker(layer);
+    highlightCatalogRowForMarker(layer);
   }
 
   function attachEditHandlers(layer) {
@@ -1769,7 +1846,8 @@
       const marker = findMarkerForFeature(layer, feat);
       const inspected = !!(marker && marker.feature && isInspectedColor((marker.feature.properties || {})._editColor)) ||
         isInspectedColor(p._editColor);
-      html += "<tr class='" + (inspected ? "inspected" : "") + "'>";
+      const onRow = !!(marker && state.selectedMarker === marker);
+      html += "<tr class='" + (inspected ? "inspected " : "") + (onRow ? "selected-row" : "") + "' data-i='" + i + "'>";
       html += "<td class='ck-col'><input type='checkbox' class='inspect-ck' data-i='" + i + "'" +
         (inspected ? " checked" : "") + " /></td>";
       html += "<td>" + (i + 1) + "</td>";
@@ -1812,15 +1890,26 @@
     };
     wrap.onclick = function (e) {
       const th = e.target && e.target.closest ? e.target.closest("th.sortable") : null;
-      if (!th) return;
-      const col = th.getAttribute("data-col");
-      if (!col) return;
-      if (state.tableSortCol === col) state.tableSortDir = -(state.tableSortDir || 1);
-      else {
-        state.tableSortCol = col;
-        state.tableSortDir = 1;
+      if (th) {
+        const col = th.getAttribute("data-col");
+        if (!col) return;
+        if (state.tableSortCol === col) state.tableSortDir = -(state.tableSortDir || 1);
+        else {
+          state.tableSortCol = col;
+          state.tableSortDir = 1;
+        }
+        renderTable(layer);
+        return;
       }
-      renderTable(layer);
+      if (e.target && e.target.closest && e.target.closest("input, button, .inspect-ck")) return;
+      const tr = e.target && e.target.closest ? e.target.closest("tr[data-i]") : null;
+      if (!tr) return;
+      const i = parseInt(tr.getAttribute("data-i"), 10);
+      if (!layer.features || !layer.features[i]) return;
+      const marker = findMarkerForFeature(layer, layer.features[i]);
+      wrap.querySelectorAll("tr.selected-row").forEach((row) => row.classList.remove("selected-row"));
+      tr.classList.add("selected-row");
+      focusMarkerOnMap(marker);
     };
     wrap.ondblclick = function (e) {
       const td = e.target && e.target.closest ? e.target.closest("td.editable") : null;
@@ -2716,7 +2805,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=48").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=49").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
