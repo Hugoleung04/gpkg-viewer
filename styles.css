@@ -49,6 +49,7 @@ body.table-collapsed .col-menu,
 body.table-collapsed .table-sort,
 body.table-collapsed #btn-sort-dir,
 body.table-collapsed #btn-cols,
+body.table-collapsed #btn-export-xlsx-3,
 body.table-collapsed .table-hint {
   display: none !important;
 }

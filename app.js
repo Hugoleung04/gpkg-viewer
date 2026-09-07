@@ -2202,8 +2202,289 @@
     setStatus("Downloaded " + name + " (" + fc.features.length + " spots).", "ok");
   }
 
+  function catalogProp(props, aliases) {
+    if (!props) return "";
+    const keys = Object.keys(props);
+    for (let a = 0; a < aliases.length; a++) {
+      const want = aliases[a].toLowerCase().replace(/[\s_\-()]/g, "");
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        if (!k || k.charAt(0) === "_") continue;
+        const norm = k.toLowerCase().replace(/[\s_\-()]/g, "");
+        if (norm === want || norm.indexOf(want) >= 0 || want.indexOf(norm) >= 0) {
+          const v = props[k];
+          if (v != null && String(v).trim() !== "") return v;
+        }
+      }
+    }
+    return "";
+  }
+
+  function currentCatalogLayer() {
+    const found = findLayer(state.selectedLayerKey);
+    if (found && found.layer && found.layer.kind === "feature") return found;
+    for (let i = 0; i < state.files.length; i++) {
+      const f = state.files[i];
+      const ly = (f.layers || []).find((l) => l.kind === "feature" && l.features && l.features.length);
+      if (ly) return { file: f, layer: ly };
+    }
+    return null;
+  }
+
+  function sortedCatalogIndexes(layer) {
+    const idxs = layer.features.map((_, i) => i);
+    if (!state.tableSortCol) return idxs;
+    const col = state.tableSortCol;
+    const dir = state.tableSortDir || 1;
+    idxs.sort((ia, ib) => {
+      const av = String((layer.features[ia].properties || {})[col] == null ? "" : (layer.features[ia].properties || {})[col]);
+      const bv = String((layer.features[ib].properties || {})[col] == null ? "" : (layer.features[ib].properties || {})[col]);
+      const cmp = av.localeCompare(bv, undefined, { numeric: true, sensitivity: "base" });
+      return dir * (cmp || (ia - ib));
+    });
+    return idxs;
+  }
+
+  function mapFeatureToInventory(props) {
+    return {
+      treeNo: catalogProp(props, ["tree no", "treeno", "tree id", "treeid", "tree_no", "tree_id", "tree_2025", "tree_ref", "tree number"]),
+      scientific: catalogProp(props, ["scientific name", "scientific", "botanical", "species", "latin"]),
+      chinese: catalogProp(props, ["chinese name", "chinese", "cn name", "中文"]),
+      dbh: catalogProp(props, ["dbh mm", "dbh", "dbh_mm", "diameter"]),
+      height: catalogProp(props, ["overall height", "height m", "height_m", "height"]),
+      spread: catalogProp(props, ["crown spread", "spread m", "spread_m", "spread", "crown"]),
+      health: catalogProp(props, ["health condition", "health", "condition"]),
+      structural: catalogProp(props, ["structural condition", "structural", "structure"]),
+      remarks: catalogProp(props, ["remarks", "remark", "notes", "note"]),
+      mitigation: catalogProp(props, ["proposed mitigation measures", "proposed mitigation", "mitigation", "recommendation", "measures"]),
+      emergency: catalogProp(props, ["emergency", "urgent"])
+    };
+  }
+
+  function crc32Bytes(u8) {
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < u8.length; i++) {
+      crc ^= u8[i];
+      for (let b = 0; b < 8; b++) crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1));
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  function zipStore(files) {
+    const enc = new TextEncoder();
+    const locals = [];
+    const centrals = [];
+    let offset = 0;
+    function u16(n) { return new Uint8Array([n & 255, (n >> 8) & 255]); }
+    function u32(n) { return new Uint8Array([n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255]); }
+    function concat(parts) {
+      let n = 0;
+      parts.forEach((p) => { n += p.length; });
+      const out = new Uint8Array(n);
+      let o = 0;
+      parts.forEach((p) => { out.set(p, o); o += p.length; });
+      return out;
+    }
+    files.forEach((f) => {
+      const name = enc.encode(f.name);
+      const data = typeof f.data === "string" ? enc.encode(f.data) : f.data;
+      const crc = crc32Bytes(data);
+      const local = concat([
+        u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(0),
+        u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0),
+        name, data
+      ]);
+      const central = concat([
+        u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0),
+        u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0),
+        u16(0), u16(0), u16(0), u32(0), u32(offset), name
+      ]);
+      locals.push(local);
+      centrals.push(central);
+      offset += local.length;
+    });
+    const centralAll = concat(centrals);
+    const end = concat([
+      u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length),
+      u32(centralAll.length), u32(offset), u16(0)
+    ]);
+    return concat(locals.concat([centralAll, end]));
+  }
+
+  function xmlEsc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function inventoryCellXml(r, c, value, style) {
+    if (value == null || value === "") {
+      return '<c r="' + c + r + '" s="' + style + '"/>';
+    }
+    if (typeof value === "number" && isFinite(value)) {
+      return '<c r="' + c + r + '" s="' + style + '" t="n"><v>' + value + "</v></c>";
+    }
+    const s = String(value);
+    const num = Number(s);
+    if (s.trim() !== "" && isFinite(num) && !/[^0-9.+-eE]/.test(s.trim())) {
+      return '<c r="' + c + r + '" s="' + style + '" t="n"><v>' + num + "</v></c>";
+    }
+    return '<c r="' + c + r + '" s="' + style + '" t="inlineStr"><is><t xml:space="preserve">' + xmlEsc(s) + "</t></is></c>";
+  }
+
+  function buildInventoryXlsx(locationText, rows) {
+    const last = Math.max(5 + rows.length - 1, 5);
+    const cols = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K"];
+    let sheet = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+    sheet += '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">';
+    sheet += '<sheetViews><sheetView workbookViewId="0"><pane ySplit="4" topLeftCell="A5" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>';
+    sheet += '<sheetFormatPr defaultRowHeight="15"/>';
+    sheet += '<cols>';
+    sheet += '<col min="1" max="1" width="12" customWidth="1"/>';
+    sheet += '<col min="2" max="2" width="28" customWidth="1"/>';
+    sheet += '<col min="3" max="3" width="16" customWidth="1"/>';
+    sheet += '<col min="4" max="4" width="12" customWidth="1"/>';
+    sheet += '<col min="5" max="5" width="14" customWidth="1"/>';
+    sheet += '<col min="6" max="6" width="14" customWidth="1"/>';
+    sheet += '<col min="7" max="7" width="16" customWidth="1"/>';
+    sheet += '<col min="8" max="8" width="18" customWidth="1"/>';
+    sheet += '<col min="9" max="9" width="32" customWidth="1"/>';
+    sheet += '<col min="10" max="10" width="34" customWidth="1"/>';
+    sheet += '<col min="11" max="11" width="12" customWidth="1"/>';
+    sheet += "</cols><sheetData>";
+    sheet += '<row r="1" ht="20"><c r="A1" s="1" t="inlineStr"><is><t>Tree Inventory</t></is></c></row>';
+    sheet += '<row r="2" ht="18"><c r="A2" s="1" t="inlineStr"><is><t>' + xmlEsc(locationText) + "</t></is></c></row>";
+    sheet += '<row r="3" ht="31.5">';
+    sheet += '<c r="A3" s="2"/>';
+    sheet += '<c r="B3" s="2" t="inlineStr"><is><t>Tree Species</t></is></c>';
+    sheet += '<c r="D3" s="2" t="inlineStr"><is><t>Estimated Size</t></is></c>';
+    sheet += '<c r="G3" s="2" t="inlineStr"><is><t>Health condition</t></is></c>';
+    sheet += '<c r="H3" s="2" t="inlineStr"><is><t>Structural Condition</t></is></c>';
+    sheet += '<c r="I3" s="2" t="inlineStr"><is><t>Remarks</t></is></c>';
+    sheet += '<c r="J3" s="2" t="inlineStr"><is><t>Proposed Mitigation Measures</t></is></c>';
+    sheet += '<c r="K3" s="2" t="inlineStr"><is><t>Emergency</t></is></c>';
+    sheet += "</row>";
+    sheet += '<row r="4" ht="57.75">';
+    const h4 = [
+      ["A", "Tree No."], ["B", "Scientific Name"], ["C", "Chinese Name"],
+      ["D", "DBH (mm)"], ["E", "Overall Height (M)"], ["F", "Crown spread (M)"],
+      ["G", "(Fair /Poor/  Dead)"], ["H", "(Fair /Poor/  Dead)"],
+      ["I", ""], ["J", ""], ["K", ""]
+    ];
+    h4.forEach((h) => {
+      sheet += '<c r="' + h[0] + '4" s="2"' + (h[1] ? ' t="inlineStr"><is><t>' + xmlEsc(h[1]) + "</t></is></c>" : "/>");
+    });
+    sheet += "</row>";
+    rows.forEach((row, i) => {
+      const r = 5 + i;
+      const vals = [row.treeNo, row.scientific, row.chinese, row.dbh, row.height, row.spread, row.health, row.structural, row.remarks, row.mitigation, row.emergency];
+      sheet += '<row r="' + r + '">';
+      cols.forEach((col, ci) => { sheet += inventoryCellXml(r, col, vals[ci], 3); });
+      sheet += "</row>";
+    });
+    sheet += "</sheetData>";
+    sheet += '<mergeCells count="7">';
+    sheet += '<mergeCell ref="A1:K1"/><mergeCell ref="A2:K2"/><mergeCell ref="B3:C3"/><mergeCell ref="D3:F3"/>';
+    sheet += '<mergeCell ref="I3:I4"/><mergeCell ref="J3:J4"/><mergeCell ref="K3:K4"/>';
+    sheet += "</mergeCells></worksheet>";
+
+    const styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<fonts count="2">' +
+      '<font><sz val="11"/><name val="Calibri"/></font>' +
+      '<font><b/><sz val="14"/><name val="Calibri"/></font>' +
+      "</fonts>" +
+      '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>' +
+      '<borders count="2">' +
+      "<border/><border>" +
+      '<left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/>' +
+      "</border></borders>" +
+      '<cellStyleXfs count="1"><xf/></cellStyleXfs>' +
+      '<cellXfs count="4">' +
+      "<xf/>" +
+      '<xf fontId="1" applyFont="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>' +
+      '<xf borderId="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>' +
+      '<xf borderId="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>' +
+      "</cellXfs></styleSheet>";
+
+    const workbook = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<sheets><sheet name="Tree Inventory" sheetId="1" r:id="rId1"/></sheets></workbook>';
+    const wbRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+      '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+      "</Relationships>";
+    const rootRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+      "</Relationships>";
+    const types = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+      '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+      '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+      "</Types>";
+
+    const bytes = zipStore([
+      { name: "[Content_Types].xml", data: types },
+      { name: "_rels/.rels", data: rootRels },
+      { name: "xl/workbook.xml", data: workbook },
+      { name: "xl/_rels/workbook.xml.rels", data: wbRels },
+      { name: "xl/styles.xml", data: styles },
+      { name: "xl/worksheets/sheet1.xml", data: sheet }
+    ]);
+    return new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  }
+
+  async function downloadBlob(blob, name, types) {
+    try {
+      if (window.showSaveFilePicker) {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: name,
+          types: types || [{ description: "Excel", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }]
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        setStatus("Saved " + handle.name + ".", "ok");
+        return;
+      }
+    } catch (err) {
+      if (err && err.name === "AbortError") return;
+    }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+    setStatus("Downloaded " + name + ".", "ok");
+  }
+
+  async function exportCatalogExcel() {
+    const found = currentCatalogLayer();
+    if (!found || !found.layer || !found.layer.features || !found.layer.features.length) {
+      setStatus("Open a tree catalog first, then Export catalog.", "warn");
+      return;
+    }
+    const layer = found.layer;
+    const idxs = sortedCatalogIndexes(layer);
+    const rows = idxs.map((i) => mapFeatureToInventory(layer.features[i].properties || {}));
+    const locName = (found.file && found.file.name ? found.file.name.replace(/\.(gpkg|geojson|json)$/i, "") : "") || layer.tableName || "";
+    const location = "Location: " + (locName || layer.tableName || "");
+    const blob = buildInventoryXlsx(location, rows);
+    const name = (locName || "tree-inventory") + "-inventory.xlsx";
+    await downloadBlob(blob, name);
+    setStatus("Exported " + rows.length + " trees to " + name + ".", "ok");
+  }
+
   if ($("btn-save-as")) $("btn-save-as").addEventListener("click", saveAsNewFile);
   if ($("btn-save-as-2")) $("btn-save-as-2").addEventListener("click", saveAsNewFile);
+  if ($("btn-export-xlsx")) $("btn-export-xlsx").addEventListener("click", exportCatalogExcel);
+  if ($("btn-export-xlsx-2")) $("btn-export-xlsx-2").addEventListener("click", exportCatalogExcel);
+  if ($("btn-export-xlsx-3")) $("btn-export-xlsx-3").addEventListener("click", exportCatalogExcel);
 
   $("btn-fit").addEventListener("click", () => {
     const layers = [];
@@ -2435,7 +2716,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=47").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=48").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
