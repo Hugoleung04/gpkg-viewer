@@ -33,6 +33,12 @@
       try { return JSON.parse(localStorage.getItem("gpkg-viewer-hidden-cols") || "[]"); }
       catch (_) { return []; }
     })(),
+    extraCols: (function () {
+      try { return JSON.parse(localStorage.getItem("gpkg-viewer-extra-cols") || "[]"); }
+      catch (_) { return []; }
+    })(),
+    addSpotMode: false,
+    addSpotField: "",
     markerZoomRef: null
   };
 
@@ -901,6 +907,138 @@
       });
     });
     try { localStorage.setItem("gpkg-viewer-edits", JSON.stringify(edits)); } catch (_) {}
+    persistAddedSpots();
+  }
+  function loadAddedSpots() {
+    try { return JSON.parse(localStorage.getItem("gpkg-viewer-added") || "{}"); }
+    catch (_) { return {}; }
+  }
+  function persistAddedSpots() {
+    const out = loadAddedSpots();
+    state.files.forEach((f) => {
+      const list = [];
+      f.layers.forEach((ly) => {
+        (ly.features || []).forEach((ft) => {
+          const p = ft.properties || {};
+          if (!p._added) return;
+          let lat = null;
+          let lng = null;
+          const marker = findMarkerForFeature(ly, ft);
+          if (marker && typeof marker.getLatLng === "function") {
+            const ll = marker.getLatLng();
+            lat = ll.lat;
+            lng = ll.lng;
+          } else if (ft.geometry && ft.geometry.coordinates) {
+            lng = ft.geometry.coordinates[0];
+            lat = ft.geometry.coordinates[1];
+          }
+          const props = {};
+          Object.keys(p).forEach((k) => {
+            if (!k) return;
+            if (k.charAt(0) === "_" && k !== "_addedId" && k !== "_editColor") return;
+            props[k] = p[k];
+          });
+          list.push({ lat: lat, lng: lng, props: props });
+        });
+      });
+      out[f.name] = list;
+    });
+    try { localStorage.setItem("gpkg-viewer-added", JSON.stringify(out)); } catch (_) {}
+  }
+  function persistExtraCols() {
+    try { localStorage.setItem("gpkg-viewer-extra-cols", JSON.stringify(state.extraCols || [])); }
+    catch (_) {}
+  }
+  function loadDeletedKeys() {
+    try { return JSON.parse(localStorage.getItem("gpkg-viewer-deleted") || "{}"); }
+    catch (_) { return {}; }
+  }
+  function persistDeletedKey(fileName, key) {
+    if (!fileName || !key) return;
+    const all = loadDeletedKeys();
+    all[fileName] = all[fileName] || [];
+    if (all[fileName].indexOf(key) < 0) all[fileName].push(key);
+    try { localStorage.setItem("gpkg-viewer-deleted", JSON.stringify(all)); } catch (_) {}
+  }
+  function applyDeletedFeatures(fileRec, layer) {
+    if (!fileRec || !layer || layer.kind !== "feature") return;
+    const keys = loadDeletedKeys()[fileRec.name] || [];
+    if (!keys.length) return;
+    const set = {};
+    keys.forEach((k) => { set[k] = true; });
+    if (layer.leafletLayer) {
+      const drop = [];
+      layer.leafletLayer.eachLayer((l) => {
+        if (set[featureKey(l, fileRec.name)] || (l.feature && l.feature.properties && set[l.feature.properties._origKey])) {
+          drop.push(l);
+        }
+      });
+      drop.forEach((l) => layer.leafletLayer.removeLayer(l));
+    }
+    layer.features = (layer.features || []).filter((ft) => {
+      const k = featureKey({ feature: ft }, fileRec.name);
+      const orig = ft.properties && ft.properties._origKey;
+      return !set[k] && !set[orig];
+    });
+    layer.loaded = layer.features.length;
+    if (layer.count != null) layer.count = layer.features.length;
+  }
+  function deleteCatalogItem(fileRec, layer, feat) {
+    if (!layer || !feat) return;
+    const marker = findMarkerForFeature(layer, feat);
+    const label = labelText(feat, state.labelField) ||
+      (feat.properties && (feat.properties["Tree ID"] || feat.properties.tree_no)) ||
+      "this tree";
+    if (!window.confirm("Delete “" + label + "”?\n\nThe spot on the map and this catalog row will both be removed.\nThis cannot be undone unless you re-open the original file from disk.")) {
+      return;
+    }
+    if (marker && state.selectedMarker === marker) selectMarker(null);
+    if (state.focusRing && marker) {
+      map.removeLayer(state.focusRing);
+      state.focusRing = null;
+    }
+    if (marker && layer.leafletLayer) layer.leafletLayer.removeLayer(marker);
+    const idx = layer.features.indexOf(feat);
+    if (idx >= 0) layer.features.splice(idx, 1);
+    else {
+      layer.features = layer.features.filter((ft) => ft !== feat);
+    }
+    layer.loaded = layer.features.length;
+    if (layer.count != null) layer.count = Math.max(0, layer.count - 1);
+    const key = featureKey(marker || { feature: feat }, fileRec && fileRec.name);
+    persistDeletedKey(fileRec && fileRec.name, key);
+    persistColorEdits();
+    persistAddedSpots();
+    renderSidebar();
+    renderTable(layer);
+    setStatus("Deleted “" + label + "” from map and catalog.", "ok");
+  }
+  function deleteSelectedSpot() {
+    const marker = state.selectedMarker;
+    if (!marker || !marker.feature) {
+      setStatus("Select a spot first, then delete.", "warn");
+      return;
+    }
+    const ly = parentLayerOf(marker);
+    const fileRec = state.files.find((f) => (f.layers || []).indexOf(ly) >= 0);
+    if (!ly) {
+      setStatus("Could not find that catalog layer.", "warn");
+      return;
+    }
+    deleteCatalogItem(fileRec, ly, marker.feature);
+  }
+  function allCatalogColumns(layer) {
+    const set = new Set();
+    ((layer && layer.columns) || []).forEach((k) => { if (k && k.charAt(0) !== "_") set.add(k); });
+    (state.extraCols || []).forEach((k) => { if (k) set.add(k); });
+    if (layer && layer.features) {
+      layer.features.forEach((ft) => {
+        Object.keys(ft.properties || {}).forEach((k) => {
+          if (k && k.charAt(0) !== "_") set.add(k);
+        });
+      });
+    }
+    return Array.from(set);
   }
   function featureKey(marker, fileName) {
     const feat = marker.feature || {};
@@ -953,21 +1091,28 @@
     syncInspectChecks();
   }
 
+  function focusRingSize() {
+    return Math.round(Math.max(28, currentMarkerRadius() * 4 + 10));
+  }
+
   function updateFocusRing(marker) {
     if (state.focusRing) {
       map.removeLayer(state.focusRing);
       state.focusRing = null;
     }
     if (!marker || typeof marker.getLatLng !== "function") return;
-    const r = Math.max(12, currentMarkerRadius() * 2.6);
-    state.focusRing = L.circleMarker(marker.getLatLng(), {
-      radius: r,
-      color: "#facc15",
-      weight: 3,
-      opacity: 1,
-      fillColor: "#facc15",
-      fillOpacity: 0.12,
-      interactive: false
+    const size = focusRingSize();
+    const icon = L.divIcon({
+      className: "focus-ring-icon",
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+      html: '<div class="focus-ring-dot"></div>'
+    });
+    state.focusRing = L.marker(marker.getLatLng(), {
+      icon: icon,
+      interactive: false,
+      keyboard: false,
+      zIndexOffset: 600
     });
     state.focusRing.addTo(map);
   }
@@ -1165,8 +1310,7 @@
     });
     layer.on("mousedown", function (e) {
       if (!state.moveMode || state.selectedMarker !== layer || typeof layer.setLatLng !== "function") return;
-      L.DomEvent.stop(e);
-      map.dragging.disable();
+      if (e.originalEvent && e.originalEvent.button != null && e.originalEvent.button !== 0) return;
       draggingMarker = layer;
       dragMoved = false;
       lastTap = { layer: null, t: 0 };
@@ -1201,12 +1345,10 @@
     if (!pt) return;
     const hit = nearestSpotAt(pt);
     if (hit !== state.selectedMarker) return;
-    ev.preventDefault();
-    map.dragging.disable();
     draggingMarker = hit;
     dragMoved = false;
     lastTap = { layer: null, t: 0 };
-  }, { passive: false });
+  }, { passive: true });
   mapEl.addEventListener("touchmove", function (ev) {
     if (!draggingMarker) return;
     ev.preventDefault();
@@ -1235,28 +1377,196 @@
   mapEl.addEventListener("touchend", onTouchTap, { passive: false });
   map.on("mousemove", function (e) {
     if (!draggingMarker) return;
+    if (!dragMoved) {
+      map.dragging.disable();
+      dragMoved = true;
+    }
     draggingMarker.setLatLng(e.latlng);
-    dragMoved = true;
+    if (state.focusRing && typeof state.focusRing.setLatLng === "function") {
+      state.focusRing.setLatLng(e.latlng);
+    }
   });
   function finishDrag() {
-    if (!draggingMarker) return;
     const m = draggingMarker;
+    if (!m) {
+      if (map.dragging && map.dragging.enable) map.dragging.enable();
+      return;
+    }
     if (typeof m.getLatLng === "function" && m.feature) {
       const ll = m.getLatLng();
       m.feature.geometry = { type: "Point", coordinates: [ll.lng, ll.lat] };
       bindFeatureLabel(m);
       persistColorEdits();
       refreshEditPanel();
+      updateFocusRing(m);
       if (dragMoved) setStatus("Moved " + (labelText(m.feature, state.labelField) || "spot") + " and saved.", "ok");
     }
     draggingMarker = null;
-    map.dragging.enable();
+    dragMoved = false;
+    if (map.dragging && map.dragging.enable) map.dragging.enable();
   }
   map.on("mouseup", finishDrag);
-  map.on("click", function () {
-    if (state.moveMode || draggingMarker || dragMoved) return;
+  window.addEventListener("mouseup", finishDrag);
+  window.addEventListener("pointerup", finishDrag);
+  map.on("zoomstart", function () {
+    if (draggingMarker && !dragMoved) {
+      draggingMarker = null;
+      if (map.dragging && map.dragging.enable) map.dragging.enable();
+    }
+  });
+  map.on("click", function (ev) {
+    if (state.addSpotMode) {
+      addSpotAt(ev.latlng);
+      return;
+    }
+    if (draggingMarker || dragMoved) return;
+    if (Date.now() - touchHandledAt < 400) return;
+    const pt = ev.containerPoint || (ev.originalEvent && map.mouseEventToContainerPoint(ev.originalEvent));
+    const hit = pt ? nearestSpotAt(pt) : null;
+    if (hit) {
+      handleSpotTap(hit);
+      return;
+    }
+    if (state.moveMode) return;
     selectMarker(null);
   });
+
+  function targetLayerForNewSpot() {
+    const found = currentCatalogLayer ? currentCatalogLayer() : null;
+    if (found && found.layer && found.file) return found;
+    for (let i = 0; i < state.files.length; i++) {
+      const f = state.files[i];
+      const ly = (f.layers || []).find((l) => l.kind === "feature");
+      if (ly) return { file: f, layer: ly };
+    }
+    return null;
+  }
+
+  function restoreAddedSpots(fileRec, layer) {
+    if (!fileRec || !layer || layer.kind !== "feature") return;
+    const list = (loadAddedSpots()[fileRec.name] || []);
+    list.forEach((item) => {
+      if (!item || item.lat == null || item.lng == null) return;
+      const id = item.props && item.props._addedId;
+      const exists = (layer.features || []).some((ft) => ft.properties && ft.properties._addedId && ft.properties._addedId === id);
+      if (exists) return;
+      const props = Object.assign({}, item.props || {});
+      props._added = true;
+      if (!props._addedId) props._addedId = "add-" + Date.now() + "-" + Math.floor(Math.random() * 9999);
+      (state.extraCols || []).forEach((c) => { if (props[c] == null) props[c] = ""; });
+      placeSpotOnLayer(fileRec, layer, item.lat, item.lng, props, true);
+    });
+  }
+
+  function placeSpotOnLayer(fileRec, layer, lat, lng, props, silent) {
+    const feat = {
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [lng, lat] },
+      properties: props
+    };
+    layer.features = layer.features || [];
+    layer.features.push(feat);
+    layer.loaded = (layer.loaded || 0) + 1;
+    layer.count = (layer.count || 0) + 1;
+    if (layer.columns && props) {
+      Object.keys(props).forEach((k) => {
+        if (k && k.charAt(0) !== "_" && layer.columns.indexOf(k) < 0) layer.columns.push(k);
+      });
+    }
+    if (!layer.leafletLayer) return null;
+    const marker = L.circleMarker([lat, lng], styleFor(layer.color || "#3b82f6", "point"));
+    marker.feature = feat;
+    if (markerRenderer) marker.options.renderer = markerRenderer;
+    bindPopup(marker, feat, layer.tableName);
+    attachEditHandlers(marker);
+    applySavedColor(marker, fileRec.name);
+    applyFeatureStyle(marker, layer);
+    bindFeatureLabel(marker);
+    layer.leafletLayer.addLayer(marker);
+    if (!silent) {
+      persistAddedSpots();
+      persistColorEdits();
+    }
+    return marker;
+  }
+
+  function setAddSpotMode(on) {
+    state.addSpotMode = !!on;
+    if (state.addSpotMode) setMoveMode(false);
+    document.body.classList.toggle("add-spot-mode", state.addSpotMode);
+    const btn = $("btn-add-spot");
+    if (btn) {
+      btn.classList.toggle("is-on", state.addSpotMode);
+      btn.textContent = state.addSpotMode ? "Tap map to place… tap here to stop" : "Add spot on map";
+    }
+    if (state.addSpotMode) setStatus("Tap the map to add a named spot.", "ok");
+  }
+
+  function addSpotAt(latlng) {
+    const found = targetLayerForNewSpot();
+    if (!found) {
+      setStatus("Open a catalog file first, then add a spot.", "warn");
+      setAddSpotMode(false);
+      return;
+    }
+    const fieldSel = $("add-spot-field");
+    const field = (fieldSel && fieldSel.value) || state.addSpotField || state.labelField || "Tree No.";
+    state.addSpotField = field;
+    let name = $("add-spot-name") ? String($("add-spot-name").value || "").trim() : "";
+    if (!name) name = window.prompt("Name for this spot (saved in “" + field + "”):", "") || "";
+    name = String(name || "").trim();
+    if (!name) {
+      setStatus("Spot not added — name is empty.", "warn");
+      return;
+    }
+    const props = { _added: true, _addedId: "add-" + Date.now() + "-" + Math.floor(Math.random() * 9999) };
+    allCatalogColumns(found.layer).forEach((c) => { props[c] = props[c] || ""; });
+    props[field] = name;
+    const marker = placeSpotOnLayer(found.file, found.layer, latlng.lat, latlng.lng, props, false);
+    if ($("add-spot-name")) $("add-spot-name").value = "";
+    refreshLabelFieldOptions();
+    renderSidebar();
+    if (state.selectedLayerKey !== found.layer.key) selectLayer(found.layer.key);
+    else renderTable(found.layer);
+    if (marker) {
+      selectMarker(marker);
+      focusMarkerOnMap(marker);
+    }
+    setStatus("Added “" + name + "” in column " + field + ".", "ok");
+  }
+
+  function addCatalogColumn() {
+    const raw = window.prompt("New catalog column name:", "");
+    const name = String(raw || "").trim();
+    if (!name) return;
+    if (name.charAt(0) === "_") {
+      setStatus("Column name cannot start with _.", "warn");
+      return;
+    }
+    const exists = (state.extraCols || []).some((c) => c.toLowerCase() === name.toLowerCase());
+    if (exists) {
+      setStatus("Column “" + name + "” already exists.", "warn");
+      return;
+    }
+    state.extraCols = state.extraCols || [];
+    state.extraCols.push(name);
+    persistExtraCols();
+    state.files.forEach((f) => {
+      f.layers.forEach((ly) => {
+        if (ly.kind !== "feature") return;
+        ly.columns = ly.columns || [];
+        if (ly.columns.indexOf(name) < 0) ly.columns.push(name);
+        (ly.features || []).forEach((ft) => {
+          ft.properties = ft.properties || {};
+          if (ft.properties[name] == null) ft.properties[name] = "";
+        });
+      });
+    });
+    refreshLabelFieldOptions();
+    const found = currentCatalogLayer ? currentCatalogLayer() : findLayer(state.selectedLayerKey);
+    renderTable(found && found.layer ? found.layer : (found));
+    setStatus("Added column “" + name + "”. It will appear at the end of Excel export.", "ok");
+  }
 
   function refreshLabelFieldOptions() {
     const sel = $("label-field");
@@ -1273,6 +1583,12 @@
         });
       });
     });
+    (state.extraCols || []).forEach((k) => {
+      if (k && !seen[k]) {
+        seen[k] = true;
+        keys.push(k);
+      }
+    });
     if (!state.labelField && keys.length) state.labelField = guessLabelField(keys);
     if (state.labelField && keys.indexOf(state.labelField) === -1 && keys.length) {
       state.labelField = guessLabelField(keys);
@@ -1282,6 +1598,23 @@
       ? keys.map((k) => '<option value="' + escapeHtml(k) + '"' + (k === prev ? " selected" : "") + ">" + escapeHtml(k) + "</option>").join("")
       : '<option value="">(no fields)</option>';
     if (prev) sel.value = prev;
+    fillAddSpotFieldSelect(keys);
+  }
+
+  function fillAddSpotFieldSelect(keys) {
+    const sel = $("add-spot-field");
+    if (!sel) return;
+    const list = (keys && keys.length) ? keys.slice() : [];
+    (state.extraCols || []).forEach((k) => { if (k && list.indexOf(k) < 0) list.push(k); });
+    if (!state.addSpotField) {
+      const prefer = list.find((k) => /tree\s*(no|id|num|ref)/i.test(k)) || state.labelField || list[0] || "";
+      state.addSpotField = prefer;
+    }
+    if (state.addSpotField && list.indexOf(state.addSpotField) < 0 && state.addSpotField) list.unshift(state.addSpotField);
+    sel.innerHTML = list.length
+      ? list.map((k) => '<option value="' + escapeHtml(k) + '"' + (k === state.addSpotField ? " selected" : "") + ">" + escapeHtml(k) + "</option>").join("")
+      : '<option value="">(no columns)</option>';
+    if (state.addSpotField) sel.value = state.addSpotField;
   }
 
   // ---------- Load file ----------
@@ -1538,6 +1871,8 @@
     };
     if (!state.labelField) state.labelField = guessLabelField(columns);
     applyLabelsToLayer(layer);
+    restoreAddedSpots(fileRec, layer);
+    applyDeletedFeatures(fileRec, layer);
     return layer;
   }
 
@@ -1797,9 +2132,12 @@
         if (k && k.charAt(0) !== "_") colsSet.add(k);
       });
     });
+    (state.extraCols || []).forEach((k) => { if (k) colsSet.add(k); });
     const allCols = Array.from(colsSet);
     const hidden = new Set(state.hiddenCols || []);
-    const cols = allCols.filter((c) => !hidden.has(c));
+    const extras = state.extraCols || [];
+    const cols = allCols.filter((c) => !hidden.has(c) && extras.indexOf(c) < 0)
+      .concat(extras.filter((c) => !hidden.has(c)));
     fillColumnMenu(allCols);
     if (state.tableSortCol && cols.indexOf(state.tableSortCol) < 0) {
       state.tableSortCol = cols.indexOf("Tree ID") >= 0 ? "Tree ID" : (cols[0] || "");
@@ -2075,6 +2413,8 @@
         leafletLayer: leafletLayer,
         visible: true
       });
+      restoreAddedSpots(rec, rec.layers[rec.layers.length - 1]);
+      applyDeletedFeatures(rec, rec.layers[rec.layers.length - 1]);
       state.files.push(rec);
       refreshLabelFieldOptions();
       applyAllLabels();
@@ -2335,6 +2675,8 @@
   }
 
   function mapFeatureToInventory(props) {
+    const extras = {};
+    (state.extraCols || []).forEach((c) => { extras[c] = props && props[c] != null ? props[c] : ""; });
     return {
       treeNo: catalogProp(props, ["tree no", "treeno", "tree id", "treeid", "tree_no", "tree_id", "tree_2025", "tree_ref", "tree number"]),
       scientific: catalogProp(props, ["scientific name", "scientific", "botanical", "species", "latin"]),
@@ -2346,8 +2688,19 @@
       structural: catalogProp(props, ["structural condition", "structural", "structure"]),
       remarks: catalogProp(props, ["remarks", "remark", "notes", "note"]),
       mitigation: catalogProp(props, ["proposed mitigation measures", "proposed mitigation", "mitigation", "recommendation", "measures"]),
-      emergency: catalogProp(props, ["emergency", "urgent"])
+      emergency: catalogProp(props, ["emergency", "urgent"]),
+      extras: extras
     };
+  }
+
+  function excelColLetter(n) {
+    let s = "";
+    while (n > 0) {
+      const m = (n - 1) % 26;
+      s = String.fromCharCode(65 + m) + s;
+      n = Math.floor((n - 1) / 26);
+    }
+    return s;
   }
 
   function crc32Bytes(u8) {
@@ -2421,8 +2774,10 @@
   }
 
   function buildInventoryXlsx(locationText, rows) {
+    const extraNames = state.extraCols || [];
     const last = Math.max(5 + rows.length - 1, 5);
     const cols = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K"];
+    extraNames.forEach((_, i) => cols.push(excelColLetter(12 + i)));
     let sheet = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
     sheet += '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">';
     sheet += '<sheetViews><sheetView workbookViewId="0"><pane ySplit="4" topLeftCell="A5" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>';
@@ -2439,6 +2794,9 @@
     sheet += '<col min="9" max="9" width="32" customWidth="1"/>';
     sheet += '<col min="10" max="10" width="34" customWidth="1"/>';
     sheet += '<col min="11" max="11" width="12" customWidth="1"/>';
+    extraNames.forEach((_, i) => {
+      sheet += '<col min="' + (12 + i) + '" max="' + (12 + i) + '" width="18" customWidth="1"/>';
+    });
     sheet += "</cols><sheetData>";
     sheet += '<row r="1" ht="20"><c r="A1" s="1" t="inlineStr"><is><t>Tree Inventory</t></is></c></row>';
     sheet += '<row r="2" ht="18"><c r="A2" s="1" t="inlineStr"><is><t>' + xmlEsc(locationText) + "</t></is></c></row>";
@@ -2459,6 +2817,7 @@
       ["G", "(Fair /Poor/  Dead)"], ["H", "(Fair /Poor/  Dead)"],
       ["I", ""], ["J", ""], ["K", ""]
     ];
+    extraNames.forEach((name, i) => h4.push([excelColLetter(12 + i), name]));
     h4.forEach((h) => {
       sheet += '<c r="' + h[0] + '4" s="2"' + (h[1] ? ' t="inlineStr"><is><t>' + xmlEsc(h[1]) + "</t></is></c>" : "/>");
     });
@@ -2466,6 +2825,7 @@
     rows.forEach((row, i) => {
       const r = 5 + i;
       const vals = [row.treeNo, row.scientific, row.chinese, row.dbh, row.height, row.spread, row.health, row.structural, row.remarks, row.mitigation, row.emergency];
+      extraNames.forEach((name) => vals.push(row.extras && row.extras[name] != null ? row.extras[name] : ""));
       sheet += '<row r="' + r + '">';
       cols.forEach((col, ci) => { sheet += inventoryCellXml(r, col, vals[ci], 3); });
       sheet += "</row>";
@@ -2574,6 +2934,14 @@
   if ($("btn-export-xlsx")) $("btn-export-xlsx").addEventListener("click", exportCatalogExcel);
   if ($("btn-export-xlsx-2")) $("btn-export-xlsx-2").addEventListener("click", exportCatalogExcel);
   if ($("btn-export-xlsx-3")) $("btn-export-xlsx-3").addEventListener("click", exportCatalogExcel);
+  if ($("btn-add-spot")) $("btn-add-spot").addEventListener("click", () => setAddSpotMode(!state.addSpotMode));
+  if ($("add-spot-field")) {
+    $("add-spot-field").addEventListener("change", (e) => {
+      state.addSpotField = e.target.value;
+    });
+  }
+  if ($("btn-add-col")) $("btn-add-col").addEventListener("click", addCatalogColumn);
+  if ($("btn-add-col-2")) $("btn-add-col-2").addEventListener("click", addCatalogColumn);
 
   $("btn-fit").addEventListener("click", () => {
     const layers = [];
@@ -2735,6 +3103,8 @@
   if ($("btn-mark-red")) {
     $("btn-mark-red").addEventListener("click", () => markSpotRed(state.selectedMarker));
   }
+  if ($("btn-delete-spot")) $("btn-delete-spot").addEventListener("click", deleteSelectedSpot);
+  if ($("btn-delete-row")) $("btn-delete-row").addEventListener("click", deleteSelectedSpot);
   if ($("btn-reset-spot")) {
     $("btn-reset-spot").addEventListener("click", () => {
       const m = state.selectedMarker;
@@ -2805,7 +3175,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=49").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=54").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||

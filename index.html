@@ -12,8 +12,8 @@
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="icon" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="vendor/leaflet.css?v=49" />
-  <link rel="stylesheet" href="styles.css?v=49" />
+  <link rel="stylesheet" href="vendor/leaflet.css?v=54" />
+  <link rel="stylesheet" href="styles.css?v=54" />
 </head>
 <body>
   <header class="topbar">
@@ -21,7 +21,7 @@
     <div class="brand">
       <div class="logo" aria-hidden="true"></div>
       <div>
-        GeoPackage Viewer <span class="ver">v1.39</span>
+        GeoPackage Viewer <span class="ver">v1.44</span>
         <small>Phone + computer — files stay on this device</small>
       </div>
     </div>
@@ -96,6 +96,19 @@
       </label>
     </div>
 
+    <div class="settings-card">
+      <div class="card-title">Add spot</div>
+      <label class="field">Name goes in column
+        <select id="add-spot-field"></select>
+      </label>
+      <label class="field">Spot name
+        <input id="add-spot-name" type="text" placeholder="e.g. T-100" />
+      </label>
+      <button class="btn full" id="btn-add-spot" type="button">Add spot on map</button>
+      <p class="hint">Turn on, tap the map, then name the new tree. A catalog row is added.</p>
+      <button class="btn full" id="btn-add-col" type="button">Add catalog column</button>
+    </div>
+
     <p class="edit-hint" id="edit-hint">Tap a tree to select it. Use Move this spot when you want to drag it.</p>
     <div class="settings-card" id="edit-panel" hidden>
       <div class="card-title">Selected spot</div>
@@ -107,6 +120,7 @@
       <button class="btn full" id="btn-move-spot" type="button">Move this spot</button>
       <button class="btn full" id="btn-mark-red" type="button">Mark red</button>
       <button class="btn full" id="btn-reset-spot" type="button">Reset to original</button>
+      <button class="btn full danger" id="btn-delete-spot" type="button">Delete this spot</button>
       <button class="btn full" id="btn-save-as-2" type="button">Save as new file</button>
       <button class="btn full" id="btn-export-xlsx-2" type="button">Export catalog (Excel)</button>
     </div>
@@ -145,6 +159,8 @@
       <button class="btn" id="btn-sort-dir" type="button">A→Z</button>
       <button class="btn" id="btn-cols" type="button">Columns</button>
       <button class="btn" id="btn-export-xlsx-3" type="button">Export</button>
+      <button class="btn" id="btn-add-col-2" type="button">+ Column</button>
+      <button class="btn danger" id="btn-delete-row" type="button">Delete</button>
       <span class="table-hint">Drag the bar above to resize · double-click a cell to edit</span>
     </div>
     <div class="col-menu" id="col-menu" hidden></div>
@@ -153,8 +169,8 @@
     </div>
   </section>
 
-  <script src="vendor/leaflet.js?v=49"></script>
-  <script src="vendor/geopackage.min.js?v=49"></script>
-  <script src="app.js?v=49"></script>
+  <script src="vendor/leaflet.js?v=54"></script>
+  <script src="vendor/geopackage.min.js?v=54"></script>
+  <script src="app.js?v=54"></script>
 </body>
 </html>
