@@ -39,6 +39,7 @@
     })(),
     addSpotMode: false,
     addSpotField: "",
+    pdf: null,
     markerZoomRef: null
   };
 
@@ -126,7 +127,7 @@
         {
           maxZoom: 24,
           maxNativeZoom: 19,
-          attribution: "Tiles &copy; Esri"
+            attribution: "Tiles &copy; Esri"
         }
       );
       state.basemap.addTo(map);
@@ -2432,9 +2433,246 @@
 
   function openAnyFile(file) {
     const n = (file.name || "").toLowerCase();
+    const t = (file.type || "").toLowerCase();
+    if (n.endsWith(".pdf") || t === "application/pdf") return openPdfFile(file);
     if (n.endsWith(".osm") || n.endsWith(".osm.xml")) return openOsmBasemap(file);
     if (n.endsWith(".geojson") || n.endsWith(".json")) return openGeoJsonFile(file);
     return openGpkgFile(file);
+  }
+
+  function invalidateMapSoon() {
+    setTimeout(() => {
+      try { map.invalidateSize({ animate: false }); } catch (_) {}
+    }, 80);
+  }
+
+  function setPdfVisible(on) {
+    const panel = $("pdf-panel");
+    const toggle = $("btn-toggle-pdf");
+    if (!state.pdf) {
+      document.body.classList.remove("pdf-open");
+      if (panel) panel.hidden = true;
+      if (toggle) toggle.hidden = true;
+      invalidateMapSoon();
+      return;
+    }
+    state.pdf.hidden = !on;
+    if (on) {
+      document.body.classList.add("pdf-open");
+      if (panel) panel.hidden = false;
+      if (toggle) {
+        toggle.hidden = false;
+        toggle.textContent = "Hide PDF";
+      }
+    } else {
+      document.body.classList.remove("pdf-open");
+      if (panel) panel.hidden = true;
+      if (toggle) {
+        toggle.hidden = false;
+        toggle.textContent = "Show PDF";
+      }
+    }
+    invalidateMapSoon();
+  }
+
+  function closePdf(forget) {
+    const frame = $("pdf-frame");
+    if (state.pdf && state.pdf.url) {
+      try { URL.revokeObjectURL(state.pdf.url); } catch (_) {}
+    }
+    if (forget && state.pdf && state.pdf.id) {
+      idbDelete(state.pdf.id);
+      try { localStorage.removeItem("gpkg-viewer-pdf-annos-" + state.pdf.id); } catch (_) {}
+    }
+    state.pdf = null;
+    if (frame) frame.src = "about:blank";
+    const host = $("pdf-pages");
+    if (host) host.innerHTML = "";
+    if ($("pdf-title")) $("pdf-title").textContent = "PDF";
+    document.body.classList.remove("pdf-pan");
+    setPdfVisible(false);
+    setStatus("PDF closed.", "ok");
+  }
+
+  function loadPdfAnnos(id) {
+    try { return JSON.parse(localStorage.getItem("gpkg-viewer-pdf-annos-" + id) || "[]"); }
+    catch (_) { return []; }
+  }
+  function savePdfAnnos() {
+    if (!state.pdf) return;
+    try { localStorage.setItem("gpkg-viewer-pdf-annos-" + state.pdf.id, JSON.stringify(state.pdf.annos || [])); }
+    catch (_) {}
+  }
+  function setPdfTool(tool) {
+    if (!state.pdf) return;
+    state.pdf.tool = tool || "pan";
+    document.body.classList.toggle("pdf-pan", state.pdf.tool === "pan");
+    document.querySelectorAll(".pdf-tool").forEach((btn) => {
+      btn.classList.toggle("is-on", btn.getAttribute("data-pdf-tool") === state.pdf.tool);
+    });
+  }
+  function drawAnnoOn(ctx, items, w, h) {
+    ctx.clearRect(0, 0, w, h);
+    (items || []).forEach((it) => {
+      if (it.type === "path" && it.pts && it.pts.length) {
+        ctx.strokeStyle = it.color || "#e11d48";
+        ctx.lineWidth = it.width || 2.4;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(it.pts[0][0] * w, it.pts[0][1] * h);
+        for (let i = 1; i < it.pts.length; i++) ctx.lineTo(it.pts[i][0] * w, it.pts[i][1] * h);
+        ctx.stroke();
+      } else if (it.type === "text") {
+        ctx.fillStyle = it.color || "#111827";
+        ctx.font = "bold " + Math.max(14, Math.round(h * 0.028)) + "px sans-serif";
+        ctx.fillText(it.text || "", (it.x || 0) * w, (it.y || 0) * h);
+      }
+    });
+  }
+  function redrawPdfPage(pageNo) {
+    if (!state.pdf) return;
+    const wrap = document.querySelector('.pdf-page-wrap[data-page="' + pageNo + '"]');
+    if (!wrap) return;
+    const anno = wrap.querySelector(".pdf-anno");
+    if (!anno) return;
+    drawAnnoOn(anno.getContext("2d"), (state.pdf.annos || []).filter((a) => a.page === pageNo), anno.width, anno.height);
+  }
+  function bindPdfAnno(wrap, pageNo) {
+    const anno = wrap.querySelector(".pdf-anno");
+    if (!anno) return;
+    let drawing = null;
+    function pos(ev) {
+      const t = (ev.touches && ev.touches[0]) || (ev.changedTouches && ev.changedTouches[0]) || ev;
+      const r = anno.getBoundingClientRect();
+      return [(t.clientX - r.left) / r.width, (t.clientY - r.top) / r.height];
+    }
+    function start(ev) {
+      if (!state.pdf || state.pdf.tool === "pan") return;
+      ev.preventDefault();
+      const p = pos(ev);
+      if (state.pdf.tool === "text") {
+        const text = window.prompt("Write on the PDF:", "");
+        if (text && text.trim()) {
+          state.pdf.annos.push({ type: "text", page: pageNo, x: p[0], y: p[1], text: text.trim(), color: "#111827" });
+          savePdfAnnos();
+          redrawPdfPage(pageNo);
+        }
+        return;
+      }
+      if (state.pdf.tool === "eraser") {
+        const hit = 0.03;
+        state.pdf.annos = (state.pdf.annos || []).filter((a) => {
+          if (a.page !== pageNo) return true;
+          if (a.type === "text") return Math.hypot(a.x - p[0], a.y - p[1]) > hit;
+          if (a.type === "path") return !(a.pts || []).some((q) => Math.hypot(q[0] - p[0], q[1] - p[1]) < hit);
+          return true;
+        });
+        savePdfAnnos();
+        redrawPdfPage(pageNo);
+        return;
+      }
+      drawing = { type: "path", page: pageNo, color: "#e11d48", width: 2.6, pts: [p] };
+    }
+    function move(ev) {
+      if (!drawing) return;
+      ev.preventDefault();
+      drawing.pts.push(pos(ev));
+      redrawPdfPage(pageNo);
+      drawAnnoOn(anno.getContext("2d"), (state.pdf.annos || []).filter((a) => a.page === pageNo).concat([drawing]), anno.width, anno.height);
+    }
+    function end(ev) {
+      if (!drawing) return;
+      if (ev) ev.preventDefault();
+      if (drawing.pts.length > 1) {
+        state.pdf.annos.push(drawing);
+        savePdfAnnos();
+      }
+      drawing = null;
+      redrawPdfPage(pageNo);
+    }
+    anno.addEventListener("mousedown", start);
+    anno.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", end);
+    anno.addEventListener("touchstart", start, { passive: false });
+    anno.addEventListener("touchmove", move, { passive: false });
+    anno.addEventListener("touchend", end, { passive: false });
+  }
+
+  async function renderPdfPages(bytes) {
+    const host = $("pdf-pages");
+    if (!host) return;
+    host.innerHTML = "";
+    if (!window.pdfjsLib) {
+      host.innerHTML = "<p class='empty-hint'>PDF engine missing. Use a computer browser to view.</p>";
+      return;
+    }
+    try {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
+      const task = window.pdfjsLib.getDocument({ data: bytes });
+      const pdf = await task.promise;
+      const max = Math.min(pdf.numPages, 40);
+      const width = Math.max(240, (host.clientWidth || 340) - 8);
+      for (let n = 1; n <= max; n++) {
+        const page = await pdf.getPage(n);
+        const base = page.getViewport({ scale: 1 });
+        const scale = width / base.width;
+        const viewport = page.getViewport({ scale: Math.min(2, Math.max(0.8, scale)) });
+        const wrap = document.createElement("div");
+        wrap.className = "pdf-page-wrap";
+        wrap.setAttribute("data-page", String(n));
+        const pageCv = document.createElement("canvas");
+        pageCv.width = viewport.width;
+        pageCv.height = viewport.height;
+        const anno = document.createElement("canvas");
+        anno.className = "pdf-anno";
+        anno.width = viewport.width;
+        anno.height = viewport.height;
+        wrap.appendChild(pageCv);
+        wrap.appendChild(anno);
+        host.appendChild(wrap);
+        await page.render({ canvasContext: pageCv.getContext("2d"), viewport: viewport }).promise;
+        bindPdfAnno(wrap, n);
+        redrawPdfPage(n);
+      }
+      if (pdf.numPages > max) {
+        const note = document.createElement("p");
+        note.className = "empty-hint";
+        note.textContent = "Showing first " + max + " of " + pdf.numPages + " pages.";
+        host.appendChild(note);
+      }
+    } catch (err) {
+      console.warn(err);
+      host.innerHTML = "<p class='empty-hint'>Could not draw this PDF. Try another file.</p>";
+    }
+  }
+
+  async function openPdfFile(file, opts) {
+    opts = opts || {};
+    if (!file) return;
+    const name = file.name || "document.pdf";
+    const bytes = opts.bytes || new Uint8Array(await file.arrayBuffer());
+    const blob = new Blob([bytes], { type: "application/pdf" });
+    if (state.pdf && state.pdf.url) {
+      try { URL.revokeObjectURL(state.pdf.url); } catch (_) {}
+    }
+    const url = URL.createObjectURL(blob);
+    const id = opts.id || ("pdf-" + Date.now());
+    state.pdf = {
+      id: id,
+      name: name,
+      url: url,
+      hidden: false,
+      tool: "pan",
+      annos: opts.annos || loadPdfAnnos(id),
+      bytes: bytes
+    };
+    if ($("pdf-title")) $("pdf-title").textContent = name;
+    setPdfVisible(true);
+    setPdfTool("pan");
+    await renderPdfPages(bytes);
+    if (!opts.fromStore) persistOpenedFile("pdf", id, file, { bytes: bytes, name: name });
+    setStatus("Opened PDF: " + name + ". On phone/iPad use Pen or Text to write.", "ok");
   }
 
   function handleFiles(fileList) {
@@ -2447,9 +2685,9 @@
       const n = (f.name || "").toLowerCase();
       return n.endsWith(".gpkg") || n.endsWith(".gpkg.zip") || n.endsWith(".sqlite") ||
         n.endsWith(".db") || n.endsWith(".zip") || n.endsWith(".geojson") || n.endsWith(".json") ||
-        n.endsWith(".osm") || n.endsWith(".osm.xml") ||
+        n.endsWith(".osm") || n.endsWith(".osm.xml") || n.endsWith(".pdf") ||
         f.type === "application/geopackage+sqlite3" || f.type === "application/geo+json" ||
-        f.type === "application/json";
+        f.type === "application/json" || f.type === "application/pdf";
     });
     const files = preferred.length ? preferred : raw;
     files.reduce((p, f) => p.then(() => openAnyFile(f)), Promise.resolve());
@@ -2465,6 +2703,74 @@
       e.target.value = "";
     });
   }
+  if ($("btn-import-pdf") && $("pdf-input")) {
+    $("btn-import-pdf").addEventListener("click", () => $("pdf-input").click());
+    $("pdf-input").addEventListener("change", (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (f) openPdfFile(f);
+      e.target.value = "";
+    });
+  }
+  if ($("btn-toggle-pdf")) {
+    $("btn-toggle-pdf").addEventListener("click", () => {
+      if (!state.pdf) {
+        if ($("pdf-input")) $("pdf-input").click();
+        return;
+      }
+      setPdfVisible(!!state.pdf.hidden);
+    });
+  }
+  if ($("btn-hide-pdf")) $("btn-hide-pdf").addEventListener("click", () => setPdfVisible(false));
+  if ($("btn-close-pdf")) $("btn-close-pdf").addEventListener("click", () => closePdf(true));
+  document.querySelectorAll(".pdf-tool").forEach((btn) => {
+    btn.addEventListener("click", () => setPdfTool(btn.getAttribute("data-pdf-tool")));
+  });
+  if ($("btn-pdf-undo")) {
+    $("btn-pdf-undo").addEventListener("click", () => {
+      if (!state.pdf || !state.pdf.annos || !state.pdf.annos.length) return;
+      const last = state.pdf.annos.pop();
+      savePdfAnnos();
+      if (last) redrawPdfPage(last.page);
+    });
+  }
+
+  (function setupPdfResizer() {
+    const handle = $("pdf-resizer");
+    if (!handle) return;
+    let startX = 0;
+    let startW = 380;
+    function widthNow() {
+      const v = getComputedStyle(document.body).getPropertyValue("--pdf-w").trim();
+      const n = parseInt(v, 10);
+      return Number.isFinite(n) && n > 0 ? n : 380;
+    }
+    function onMove(ev) {
+      const x = ev.touches ? ev.touches[0].clientX : ev.clientX;
+      const next = Math.max(240, Math.min(window.innerWidth * 0.7, startW + (startX - x)));
+      document.body.style.setProperty("--pdf-w", next + "px");
+      invalidateMapSoon();
+    }
+    function onUp() {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onUp);
+      invalidateMapSoon();
+    }
+    handle.addEventListener("mousedown", (ev) => {
+      ev.preventDefault();
+      startX = ev.clientX;
+      startW = widthNow();
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    });
+    handle.addEventListener("touchstart", (ev) => {
+      startX = ev.touches[0].clientX;
+      startW = widthNow();
+      window.addEventListener("touchmove", onMove, { passive: false });
+      window.addEventListener("touchend", onUp);
+    }, { passive: true });
+  })();
 
   // Open is a <label for="file-input"> so iPhone Safari can show the Files picker.
 
@@ -2958,6 +3264,7 @@
   });
 
   function clearAllFiles() {
+    if (state.pdf) closePdf(false);
     [...state.files].forEach((f) => removeFile(f.id));
     [...state.importedBasemaps].forEach((b) => idbDelete(b.id));
     state.importedBasemaps = [];
@@ -3175,7 +3482,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=54").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=58").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
@@ -3218,6 +3525,7 @@
         const file = new File([bytes], row.name || "restored", { type: row.mime || "" });
         if (row.kind === "osm") await openOsmBasemap(file, { fromStore: true, id: row.id, title: row.title });
         else if (row.kind === "geojson") await openGeoJsonFile(file, { fromStore: true, id: row.id });
+        else if (row.kind === "pdf") await openPdfFile(file, { fromStore: true, id: row.id, bytes: bytes });
         else await openGpkgFile(file, { fromStore: true, id: row.id });
       }
       const lastMap = localStorage.getItem("gpkg-viewer-basemap");

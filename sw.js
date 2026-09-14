@@ -1,4 +1,4 @@
-const CACHE = "gpkg-viewer-v54";
+const CACHE = "gpkg-viewer-v58";
 const ASSETS = [
   "./index.html",
   "./styles.css",
@@ -7,6 +7,8 @@ const ASSETS = [
   "./vendor/leaflet.css",
   "./vendor/leaflet.js",
   "./vendor/geopackage.min.js",
+  "./vendor/pdf.min.js",
+  "./vendor/pdf.worker.min.js",
   "./vendor/sql-wasm.wasm",
   "./icons/icon-192.png",
   "./icons/icon-512.png",

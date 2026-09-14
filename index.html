@@ -12,8 +12,8 @@
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="icon" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="vendor/leaflet.css?v=54" />
-  <link rel="stylesheet" href="styles.css?v=54" />
+  <link rel="stylesheet" href="vendor/leaflet.css?v=58" />
+  <link rel="stylesheet" href="styles.css?v=58" />
 </head>
 <body>
   <header class="topbar">
@@ -21,7 +21,7 @@
     <div class="brand">
       <div class="logo" aria-hidden="true"></div>
       <div>
-        GeoPackage Viewer <span class="ver">v1.44</span>
+        GeoPackage Viewer <span class="ver">v1.48</span>
         <small>Phone + computer — files stay on this device</small>
       </div>
     </div>
@@ -34,6 +34,7 @@
       <button class="btn" id="btn-fit" type="button">Fit</button>
       <button class="btn" id="btn-save-as" type="button">Save as</button>
       <button class="btn" id="btn-export-xlsx" type="button">Export catalog</button>
+      <button class="btn" id="btn-toggle-pdf" type="button" hidden>Show PDF</button>
       <button class="btn desktop-only" id="btn-clear" type="button">Clear</button>
     </div>
   </header>
@@ -70,6 +71,8 @@
           <option value="carto">Carto Dark</option>
         </select>
       </label>
+      <button class="btn full" id="btn-import-pdf" type="button">Import PDF</button>
+      <input id="pdf-input" type="file" accept="application/pdf,.pdf,*/*" hidden />
       <button class="btn full" id="btn-import-osm" type="button">Import OSM basemap</button>
       <input id="osm-input" type="file" accept="*/*" hidden />
       <div class="hint">Export a small area from openstreetmap.org → Export → import that .osm. You can rename or delete only maps you imported. Then Open your tree GPKG.</div>
@@ -146,6 +149,23 @@
   </aside>
 
   <div id="map"></div>
+  <aside class="pdf-panel" id="pdf-panel" hidden>
+    <div class="pdf-resizer" id="pdf-resizer" title="Drag to resize PDF"></div>
+    <div class="pdf-bar">
+      <strong id="pdf-title">PDF</strong>
+      <button class="btn" id="btn-hide-pdf" type="button">Hide</button>
+      <button class="btn" id="btn-close-pdf" type="button">Close</button>
+    </div>
+    <div class="pdf-tools">
+      <button class="btn pdf-tool is-on" data-pdf-tool="pan" type="button">Move</button>
+      <button class="btn pdf-tool" data-pdf-tool="pen" type="button">Pen</button>
+      <button class="btn pdf-tool" data-pdf-tool="text" type="button">Text</button>
+      <button class="btn pdf-tool" data-pdf-tool="eraser" type="button">Eraser</button>
+      <button class="btn" id="btn-pdf-undo" type="button">Undo</button>
+    </div>
+    <div class="pdf-pages" id="pdf-pages"></div>
+    <iframe id="pdf-frame" title="PDF viewer" hidden></iframe>
+  </aside>
   <div class="status" id="status">Starting…</div>
 
   <section class="table-panel" id="table-panel">
@@ -169,8 +189,9 @@
     </div>
   </section>
 
-  <script src="vendor/leaflet.js?v=54"></script>
-  <script src="vendor/geopackage.min.js?v=54"></script>
-  <script src="app.js?v=54"></script>
+  <script src="vendor/leaflet.js?v=58"></script>
+  <script src="vendor/geopackage.min.js?v=58"></script>
+  <script src="vendor/pdf.min.js?v=58"></script>
+  <script src="app.js?v=58"></script>
 </body>
 </html>
