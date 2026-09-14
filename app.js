@@ -2712,8 +2712,112 @@
       setPdfVisible(!!state.pdf.hidden);
     });
   }
+  function canvasToJpegBytes(canvas) {
+    return new Promise((resolve) => {
+      try {
+        canvas.toBlob(function (blob) {
+          if (!blob) { resolve(null); return; }
+          const fr = new FileReader();
+          fr.onload = function () { resolve(new Uint8Array(fr.result)); };
+          fr.onerror = function () { resolve(null); };
+          fr.readAsArrayBuffer(blob);
+        }, "image/jpeg", 0.88);
+      } catch (_) { resolve(null); }
+    });
+  }
+  function buildImagesPdf(pages) {
+    const enc = new TextEncoder();
+    const objects = [];
+    function add(str, bin) { objects.push({ str: str, bin: bin || null }); return objects.length; }
+    const n = pages.length;
+    const pageIds = [];
+    const contentIds = [];
+    const imgIds = [];
+    add("<< /Type /Catalog /Pages 2 0 R >>");
+    // placeholders filled after we know ids: page objs start at 3
+    for (let i = 0; i < n; i++) pageIds.push(3 + i);
+    for (let i = 0; i < n; i++) contentIds.push(3 + n + i);
+    for (let i = 0; i < n; i++) imgIds.push(3 + 2 * n + i);
+    add("<< /Type /Pages /Kids [" + pageIds.map((id) => id + " 0 R").join(" ") + "] /Count " + n + " >>");
+    pages.forEach((p, i) => {
+      add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + p.w + " " + p.h + "] /Contents " + contentIds[i] + " 0 R /Resources << /XObject << /Im0 " + imgIds[i] + " 0 R >> >> >>");
+    });
+    pages.forEach((p) => {
+      const stream = "q " + p.w + " 0 0 " + p.h + " 0 0 cm /Im0 Do Q\n";
+      add("<< /Length " + enc.encode(stream).length + " >>\nstream\n" + stream + "endstream");
+    });
+    pages.forEach((p) => {
+      add("<< /Type /XObject /Subtype /Image /Width " + p.iw + " /Height " + p.ih + " /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length " + p.jpeg.length + " >>\nstream\n", p.jpeg);
+    });
+    const header = enc.encode("%PDF-1.4\n");
+    const chunks = [header];
+    const offsets = [0];
+    let pos = header.length;
+    objects.forEach((obj, i) => {
+      offsets.push(pos);
+      const head = enc.encode((i + 1) + " 0 obj\n");
+      const body = enc.encode(obj.str);
+      const tail = enc.encode("\nendobj\n");
+      const extra = obj.bin ? obj.bin.length + 10 : 0;
+      chunks.push(head, body);
+      if (obj.bin) chunks.push(obj.bin, enc.encode("\nendstream"));
+      chunks.push(tail);
+      pos += head.length + body.length + tail.length + extra;
+    });
+    let xref = "xref\n0 " + (objects.length + 1) + "\n0000000000 65535 f \n";
+    offsets.slice(1).forEach((off) => { xref += String(off).padStart(10, "0") + " 00000 n \n"; });
+    xref += "trailer << /Size " + (objects.length + 1) + " /Root 1 0 R >>\nstartxref\n" + pos + "\n%%EOF";
+    chunks.push(enc.encode(xref));
+    let total = 0;
+    chunks.forEach((c) => { total += c.length; });
+    const out = new Uint8Array(total);
+    let o = 0;
+    chunks.forEach((c) => { out.set(c, o); o += c.length; });
+    return out;
+  }
+  async function exportAnnotatedPdf() {
+    if (!state.pdf) {
+      setStatus("Open a PDF first.", "warn");
+      return;
+    }
+    const wraps = document.querySelectorAll("#pdf-pages .pdf-page-wrap");
+    if (!wraps.length) {
+      setStatus("Nothing to export.", "warn");
+      return;
+    }
+    setStatus("Building PDF…", "");
+    const pages = [];
+    for (let i = 0; i < wraps.length; i++) {
+      const wrap = wraps[i];
+      const pageCv = wrap.querySelector("canvas:not(.pdf-anno)");
+      const anno = wrap.querySelector("canvas.pdf-anno");
+      if (!pageCv) continue;
+      const out = document.createElement("canvas");
+      out.width = pageCv.width;
+      out.height = pageCv.height;
+      const ctx = out.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, out.width, out.height);
+      ctx.drawImage(pageCv, 0, 0);
+      if (anno) ctx.drawImage(anno, 0, 0);
+      const jpeg = await canvasToJpegBytes(out);
+      if (!jpeg) continue;
+      const maxW = 842;
+      const sc = Math.min(1, maxW / out.width);
+      pages.push({ jpeg: jpeg, iw: out.width, ih: out.height, w: Math.round(out.width * sc), h: Math.round(out.height * sc) });
+    }
+    if (!pages.length) {
+      setStatus("Could not export this PDF.", "error");
+      return;
+    }
+    const pdf = buildImagesPdf(pages);
+    const blob = new Blob([pdf], { type: "application/pdf" });
+    const base = (state.pdf.name || "document").replace(/\.pdf$/i, "");
+    await downloadBlob(blob, base + "-marked.pdf", [{ description: "PDF", accept: { "application/pdf": [".pdf"] } }]);
+  }
   if ($("btn-hide-pdf")) $("btn-hide-pdf").addEventListener("click", () => setPdfVisible(false));
   if ($("btn-close-pdf")) $("btn-close-pdf").addEventListener("click", () => closePdf(true));
+  if ($("btn-export-pdf-file")) $("btn-export-pdf-file").addEventListener("click", exportAnnotatedPdf);
   document.querySelectorAll(".pdf-tool").forEach((btn) => {
     btn.addEventListener("click", () => setPdfTool(btn.getAttribute("data-pdf-tool")));
   });
@@ -2741,25 +2845,47 @@
     if (!host || !el) return;
     host.scrollTop = el.offsetTop;
   }
-  function setPdfZoom(z, anchor) {
+  function setPdfZoom(z, focus) {
     if (!state.pdf) return;
     const host = $("pdf-pages");
     const inner = $("pdf-zoom-inner");
-    const keep = anchor || visiblePdfPage();
+    const prev = state.pdf.viewZoom || 1;
     const next = Math.max(0.6, Math.min(3, Number(z) || 1));
+    let fx = 0.5, fy = 0.5, cx = 0, cy = 0;
+    if (host) {
+      const r = host.getBoundingClientRect();
+      if (focus && focus.clientX != null) {
+        fx = (host.scrollLeft + (focus.clientX - r.left)) / prev;
+        fy = (host.scrollTop + (focus.clientY - r.top)) / prev;
+        cx = focus.clientX - r.left;
+        cy = focus.clientY - r.top;
+      } else if (focus && focus.contentX != null) {
+        fx = focus.contentX;
+        fy = focus.contentY;
+        cx = focus.viewX != null ? focus.viewX : r.width / 2;
+        cy = focus.viewY != null ? focus.viewY : r.height / 2;
+      } else {
+        fx = (host.scrollLeft + host.clientWidth / 2) / prev;
+        fy = (host.scrollTop + host.clientHeight / 2) / prev;
+        cx = host.clientWidth / 2;
+        cy = host.clientHeight / 2;
+      }
+    }
     state.pdf.viewZoom = next;
     if (inner) {
-      inner.style.zoom = "";
       inner.style.transform = "scale(" + next + ")";
       inner.style.transformOrigin = "0 0";
       inner.style.width = "100%";
-      const baseH = inner.scrollHeight || inner.offsetHeight || 0;
-      const baseW = inner.scrollWidth || inner.offsetWidth || 0;
+      const baseH = inner.offsetHeight || inner.scrollHeight || 0;
+      const baseW = inner.offsetWidth || inner.scrollWidth || 0;
       inner.style.marginBottom = Math.max(0, baseH * (next - 1)) + "px";
       inner.style.marginRight = Math.max(0, baseW * (next - 1)) + "px";
     }
+    if (host) {
+      host.scrollLeft = fx * next - cx;
+      host.scrollTop = fy * next - cy;
+    }
     if ($("pdf-zoom-val")) $("pdf-zoom-val").textContent = Math.round(next * 100) + "%";
-    if (keep) restorePdfPage(keep);
   }
 
   window.addEventListener("touchmove", function (ev) {
@@ -2866,7 +2992,17 @@
     host.addEventListener("touchstart", (ev) => {
       if (!state.pdf) return;
       if (ev.touches.length === 2) {
-        pinch = { d: touchDist(ev), z: state.pdf.viewZoom || 1, page: visiblePdfPage() };
+        ev.preventDefault();
+        const z0 = state.pdf.viewZoom || 1;
+        const r = host.getBoundingClientRect();
+        const mx = (ev.touches[0].clientX + ev.touches[1].clientX) / 2;
+        const my = (ev.touches[0].clientY + ev.touches[1].clientY) / 2;
+        pinch = {
+          d: touchDist(ev),
+          z: z0,
+          contentX: (host.scrollLeft + (mx - r.left)) / z0,
+          contentY: (host.scrollTop + (my - r.top)) / z0
+        };
         pan = null;
         return;
       }
@@ -2881,7 +3017,15 @@
     host.addEventListener("touchmove", (ev) => {
       if (pinch && ev.touches.length === 2) {
         ev.preventDefault();
-        setPdfZoom(pinch.z * (touchDist(ev) / (pinch.d || 1)), pinch.page);
+        const r = host.getBoundingClientRect();
+        const mx = (ev.touches[0].clientX + ev.touches[1].clientX) / 2;
+        const my = (ev.touches[0].clientY + ev.touches[1].clientY) / 2;
+        setPdfZoom(pinch.z * (touchDist(ev) / (pinch.d || 1)), {
+          contentX: pinch.contentX,
+          contentY: pinch.contentY,
+          viewX: mx - r.left,
+          viewY: my - r.top
+        });
         return;
       }
       if (drawing && ev.touches[0] && ev.touches[0].touchType === "stylus") {
@@ -3649,7 +3793,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=61").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=62").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
