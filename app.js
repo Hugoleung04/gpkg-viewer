@@ -2538,19 +2538,43 @@
     if (!anno) return;
     drawAnnoOn(anno.getContext("2d"), (state.pdf.annos || []).filter((a) => a.page === pageNo), anno.width, anno.height);
   }
+  function isPencilEvent(ev) {
+    if (!ev) return false;
+    if (ev.pointerType === "pen") return true;
+    const t = (ev.touches && ev.touches[0]) || (ev.changedTouches && ev.changedTouches[0]);
+    if (t && (t.touchType === "stylus" || t.touchType === "direct" && ev.pointerType === "pen")) return true;
+    if (t && t.touchType === "stylus") return true;
+    return false;
+  }
+  function isFingerEvent(ev) {
+    if (!ev) return false;
+    if (ev.pointerType === "touch") return true;
+    const t = (ev.touches && ev.touches[0]) || (ev.changedTouches && ev.changedTouches[0]);
+    if (t && t.touchType === "direct") return true;
+    return ev.pointerType === "touch";
+  }
+  function canWriteWith(ev) {
+    if (!state.pdf || state.pdf.tool === "pan") return false;
+    if (isPencilEvent(ev)) return true;
+    if (isFingerEvent(ev)) return false;
+    return ev.pointerType === "mouse" || ev.type.indexOf("mouse") === 0;
+  }
+  function eventPosOnAnno(ev, anno) {
+    const src = ev;
+    const r = anno.getBoundingClientRect();
+    return [(src.clientX - r.left) / r.width, (src.clientY - r.top) / r.height];
+  }
   function bindPdfAnno(wrap, pageNo) {
     const anno = wrap.querySelector(".pdf-anno");
     if (!anno) return;
     let drawing = null;
-    function pos(ev) {
-      const t = (ev.touches && ev.touches[0]) || (ev.changedTouches && ev.changedTouches[0]) || ev;
-      const r = anno.getBoundingClientRect();
-      return [(t.clientX - r.left) / r.width, (t.clientY - r.top) / r.height];
-    }
     function start(ev) {
-      if (!state.pdf || state.pdf.tool === "pan") return;
+      if (!canWriteWith(ev)) return;
       ev.preventDefault();
-      const p = pos(ev);
+      if (anno.setPointerCapture && ev.pointerId != null) {
+        try { anno.setPointerCapture(ev.pointerId); } catch (_) {}
+      }
+      const p = eventPosOnAnno(ev, anno);
       if (state.pdf.tool === "text") {
         const text = window.prompt("Write on the PDF:", "");
         if (text && text.trim()) {
@@ -2577,8 +2601,7 @@
     function move(ev) {
       if (!drawing) return;
       ev.preventDefault();
-      drawing.pts.push(pos(ev));
-      redrawPdfPage(pageNo);
+      drawing.pts.push(eventPosOnAnno(ev, anno));
       drawAnnoOn(anno.getContext("2d"), (state.pdf.annos || []).filter((a) => a.page === pageNo).concat([drawing]), anno.width, anno.height);
     }
     function end(ev) {
@@ -2591,12 +2614,10 @@
       drawing = null;
       redrawPdfPage(pageNo);
     }
-    anno.addEventListener("mousedown", start);
-    anno.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", end);
-    anno.addEventListener("touchstart", start, { passive: false });
-    anno.addEventListener("touchmove", move, { passive: false });
-    anno.addEventListener("touchend", end, { passive: false });
+    anno.addEventListener("pointerdown", start);
+    anno.addEventListener("pointermove", move);
+    anno.addEventListener("pointerup", end);
+    anno.addEventListener("pointercancel", end);
   }
 
   async function renderPdfPages(bytes) {
@@ -2663,16 +2684,18 @@
       name: name,
       url: url,
       hidden: false,
-      tool: "pan",
+      tool: "pen",
+      viewZoom: 1,
       annos: opts.annos || loadPdfAnnos(id),
       bytes: bytes
     };
     if ($("pdf-title")) $("pdf-title").textContent = name;
     setPdfVisible(true);
-    setPdfTool("pan");
+    setPdfTool("pen");
     await renderPdfPages(bytes);
     if (!opts.fromStore) persistOpenedFile("pdf", id, file, { bytes: bytes, name: name });
-    setStatus("Opened PDF: " + name + ". On phone/iPad use Pen or Text to write.", "ok");
+    setPdfZoom(state.pdf.viewZoom || 1);
+    setStatus("Opened PDF: " + name + ". Finger moves/zooms. Apple Pencil writes.", "ok");
   }
 
   function handleFiles(fileList) {
@@ -2734,42 +2757,81 @@
     });
   }
 
+  function setPdfZoom(z) {
+    if (!state.pdf) return;
+    const next = Math.max(0.6, Math.min(3, z));
+    state.pdf.viewZoom = next;
+    const host = $("pdf-pages");
+    if (host) host.style.setProperty("--pdf-zoom", String(next));
+    if ($("pdf-zoom-val")) $("pdf-zoom-val").textContent = Math.round(next * 100) + "%";
+  }
+
+  if ($("btn-pdf-zoom-in")) $("btn-pdf-zoom-in").addEventListener("click", () => setPdfZoom((state.pdf && state.pdf.viewZoom || 1) + 0.2));
+  if ($("btn-pdf-zoom-out")) $("btn-pdf-zoom-out").addEventListener("click", () => setPdfZoom((state.pdf && state.pdf.viewZoom || 1) - 0.2));
+
+  (function setupPdfPinchZoom() {
+    const host = $("pdf-pages");
+    if (!host) return;
+    let pinch = null;
+    function dist(ev) {
+      const a = ev.touches[0], b = ev.touches[1];
+      return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    }
+    host.addEventListener("touchstart", (ev) => {
+      if (!state.pdf || ev.touches.length !== 2) { pinch = null; return; }
+      if ((ev.touches[0].touchType === "stylus") || (ev.touches[1].touchType === "stylus")) return;
+      pinch = { d: dist(ev), z: state.pdf.viewZoom || 1 };
+    }, { passive: true });
+    host.addEventListener("touchmove", (ev) => {
+      if (!pinch || ev.touches.length !== 2) return;
+      ev.preventDefault();
+      setPdfZoom(pinch.z * (dist(ev) / pinch.d));
+    }, { passive: false });
+    host.addEventListener("touchend", () => { pinch = null; });
+    host.addEventListener("wheel", (ev) => {
+      if (!state.pdf || !(ev.ctrlKey || ev.metaKey)) return;
+      ev.preventDefault();
+      setPdfZoom((state.pdf.viewZoom || 1) + (ev.deltaY < 0 ? 0.1 : -0.1));
+    }, { passive: false });
+  })();
+
   (function setupPdfResizer() {
     const handle = $("pdf-resizer");
+    const panel = $("pdf-panel");
     if (!handle) return;
     let startX = 0;
     let startW = 380;
     function widthNow() {
+      if (panel && panel.offsetWidth) return panel.offsetWidth;
       const v = getComputedStyle(document.body).getPropertyValue("--pdf-w").trim();
       const n = parseInt(v, 10);
-      return Number.isFinite(n) && n > 0 ? n : 380;
+      return Number.isFinite(n) && n > 0 ? n : 360;
+    }
+    function applyW(next) {
+      const w = Math.max(220, Math.min(window.innerWidth * 0.82, next));
+      document.body.style.setProperty("--pdf-w", w + "px");
+      if (panel) panel.style.width = w + "px";
+      invalidateMapSoon();
     }
     function onMove(ev) {
-      const x = ev.touches ? ev.touches[0].clientX : ev.clientX;
-      const next = Math.max(240, Math.min(window.innerWidth * 0.7, startW + (startX - x)));
-      document.body.style.setProperty("--pdf-w", next + "px");
-      invalidateMapSoon();
+      const x = ev.clientX != null ? ev.clientX : (ev.touches && ev.touches[0] && ev.touches[0].clientX);
+      if (x == null) return;
+      applyW(startW + (startX - x));
     }
     function onUp() {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      window.removeEventListener("touchmove", onMove);
-      window.removeEventListener("touchend", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
       invalidateMapSoon();
     }
-    handle.addEventListener("mousedown", (ev) => {
+    handle.addEventListener("pointerdown", (ev) => {
       ev.preventDefault();
+      ev.stopPropagation();
       startX = ev.clientX;
       startW = widthNow();
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp);
+      if (handle.setPointerCapture) handle.setPointerCapture(ev.pointerId);
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
     });
-    handle.addEventListener("touchstart", (ev) => {
-      startX = ev.touches[0].clientX;
-      startW = widthNow();
-      window.addEventListener("touchmove", onMove, { passive: false });
-      window.addEventListener("touchend", onUp);
-    }, { passive: true });
   })();
 
   // Open is a <label for="file-input"> so iPhone Safari can show the Files picker.
@@ -3482,7 +3544,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=58").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=59").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
