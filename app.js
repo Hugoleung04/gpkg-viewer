@@ -2520,7 +2520,7 @@
     (items || []).forEach((it) => {
       if (it.type === "path" && it.pts && it.pts.length) {
         ctx.strokeStyle = it.color || "#e11d48";
-        ctx.lineWidth = it.width || 2.4;
+        ctx.lineWidth = (it.width || 2.4) * Math.max(1, w / 900);
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
         ctx.beginPath();
@@ -2603,25 +2603,33 @@
       inner.id = "pdf-zoom-inner";
       host.appendChild(inner);
       const width = Math.max(240, (host.clientWidth || 340));
+      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
       for (let n = 1; n <= max; n++) {
         const page = await pdf.getPage(n);
         const base = page.getViewport({ scale: 1 });
-        const scale = width / base.width;
-        const viewport = page.getViewport({ scale: Math.min(2, Math.max(0.8, scale)) });
+        const cssScale = width / base.width;
+        const viewport = page.getViewport({ scale: Math.min(3.2, Math.max(1.2, cssScale * dpr)) });
         const wrap = document.createElement("div");
         wrap.className = "pdf-page-wrap";
         wrap.setAttribute("data-page", String(n));
         const pageCv = document.createElement("canvas");
         pageCv.width = viewport.width;
         pageCv.height = viewport.height;
+        pageCv.style.width = "100%";
+        pageCv.style.height = "auto";
         const anno = document.createElement("canvas");
         anno.className = "pdf-anno";
         anno.width = viewport.width;
         anno.height = viewport.height;
+        anno.style.width = "100%";
+        anno.style.height = "auto";
         wrap.appendChild(pageCv);
         wrap.appendChild(anno);
         inner.appendChild(wrap);
-        await page.render({ canvasContext: pageCv.getContext("2d"), viewport: viewport }).promise;
+        const pctx = pageCv.getContext("2d", { alpha: false });
+        pctx.imageSmoothingEnabled = true;
+        pctx.imageSmoothingQuality = "high";
+        await page.render({ canvasContext: pctx, viewport: viewport }).promise;
         bindPdfAnno(wrap, n);
         redrawPdfPage(n);
       }
@@ -2721,7 +2729,7 @@
           fr.onload = function () { resolve(new Uint8Array(fr.result)); };
           fr.onerror = function () { resolve(null); };
           fr.readAsArrayBuffer(blob);
-        }, "image/jpeg", 0.88);
+        }, "image/jpeg", 0.92);
       } catch (_) { resolve(null); }
     });
   }
@@ -2785,26 +2793,62 @@
       setStatus("Nothing to export.", "warn");
       return;
     }
-    setStatus("Building PDF…", "");
+    setStatus("Building a high-resolution PDF…", "");
     const pages = [];
-    for (let i = 0; i < wraps.length; i++) {
-      const wrap = wraps[i];
-      const pageCv = wrap.querySelector("canvas:not(.pdf-anno)");
-      const anno = wrap.querySelector("canvas.pdf-anno");
-      if (!pageCv) continue;
-      const out = document.createElement("canvas");
-      out.width = pageCv.width;
-      out.height = pageCv.height;
-      const ctx = out.getContext("2d");
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(0, 0, out.width, out.height);
-      ctx.drawImage(pageCv, 0, 0);
-      if (anno) ctx.drawImage(anno, 0, 0);
-      const jpeg = await canvasToJpegBytes(out);
-      if (!jpeg) continue;
-      const maxW = 842;
-      const sc = Math.min(1, maxW / out.width);
-      pages.push({ jpeg: jpeg, iw: out.width, ih: out.height, w: Math.round(out.width * sc), h: Math.round(out.height * sc) });
+    try {
+      if (window.pdfjsLib && state.pdf.bytes) {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
+        const src = await window.pdfjsLib.getDocument({ data: state.pdf.bytes }).promise;
+        const count = Math.min(src.numPages, wraps.length);
+        for (let n = 1; n <= count; n++) {
+          const page = await src.getPage(n);
+          const base = page.getViewport({ scale: 1 });
+          const scale = Math.min(2.8, 2000 / base.width);
+          const viewport = page.getViewport({ scale: scale });
+          const out = document.createElement("canvas");
+          out.width = Math.round(viewport.width);
+          out.height = Math.round(viewport.height);
+          const ctx = out.getContext("2d", { alpha: false });
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(0, 0, out.width, out.height);
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = "high";
+          await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+          drawAnnoOn(ctx, (state.pdf.annos || []).filter((a) => a.page === n), out.width, out.height);
+          const jpeg = await canvasToJpegBytes(out);
+          if (!jpeg) continue;
+          const pt = 72 / 150;
+          pages.push({
+            jpeg: jpeg,
+            iw: out.width,
+            ih: out.height,
+            w: Math.round(out.width * pt),
+            h: Math.round(out.height * pt)
+          });
+        }
+      }
+    } catch (err) {
+      console.warn(err);
+    }
+    if (!pages.length) {
+      for (let i = 0; i < wraps.length; i++) {
+        const wrap = wraps[i];
+        const pageCv = wrap.querySelector("canvas:not(.pdf-anno)");
+        const anno = wrap.querySelector("canvas.pdf-anno");
+        if (!pageCv) continue;
+        const out = document.createElement("canvas");
+        out.width = pageCv.width;
+        out.height = pageCv.height;
+        const ctx = out.getContext("2d");
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, out.width, out.height);
+        ctx.drawImage(pageCv, 0, 0);
+        if (anno) ctx.drawImage(anno, 0, 0);
+        const jpeg = await canvasToJpegBytes(out);
+        if (!jpeg) continue;
+        const pt = 72 / 150;
+        pages.push({ jpeg: jpeg, iw: out.width, ih: out.height, w: Math.round(out.width * pt), h: Math.round(out.height * pt) });
+      }
     }
     if (!pages.length) {
       setStatus("Could not export this PDF.", "error");
@@ -3793,7 +3837,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=62").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=63").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
