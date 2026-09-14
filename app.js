@@ -2459,6 +2459,9 @@
     state.pdf.hidden = !on;
     if (on) {
       document.body.classList.add("pdf-open");
+      if (!document.body.style.getPropertyValue("--pdf-w")) {
+        document.body.style.setProperty("--pdf-w", Math.round(Math.min(420, window.innerWidth * 0.42)) + "px");
+      }
       if (panel) panel.hidden = false;
       if (toggle) {
         toggle.hidden = false;
@@ -2571,6 +2574,9 @@
     function start(ev) {
       if (!canWriteWith(ev)) return;
       ev.preventDefault();
+      ev.stopPropagation();
+      document.body.classList.add("pdf-inking");
+      if (state.pdf) state.pdf.inking = true;
       if (anno.setPointerCapture && ev.pointerId != null) {
         try { anno.setPointerCapture(ev.pointerId); } catch (_) {}
       }
@@ -2605,6 +2611,8 @@
       drawAnnoOn(anno.getContext("2d"), (state.pdf.annos || []).filter((a) => a.page === pageNo).concat([drawing]), anno.width, anno.height);
     }
     function end(ev) {
+      document.body.classList.remove("pdf-inking");
+      if (state.pdf) state.pdf.inking = false;
       if (!drawing) return;
       if (ev) ev.preventDefault();
       if (drawing.pts.length > 1) {
@@ -2633,7 +2641,11 @@
       const task = window.pdfjsLib.getDocument({ data: bytes });
       const pdf = await task.promise;
       const max = Math.min(pdf.numPages, 40);
-      const width = Math.max(240, (host.clientWidth || 340) - 8);
+      const inner = document.createElement("div");
+      inner.className = "pdf-zoom-inner";
+      inner.id = "pdf-zoom-inner";
+      host.appendChild(inner);
+      const width = Math.max(240, (host.clientWidth || 340));
       for (let n = 1; n <= max; n++) {
         const page = await pdf.getPage(n);
         const base = page.getViewport({ scale: 1 });
@@ -2651,7 +2663,7 @@
         anno.height = viewport.height;
         wrap.appendChild(pageCv);
         wrap.appendChild(anno);
-        host.appendChild(wrap);
+        inner.appendChild(wrap);
         await page.render({ canvasContext: pageCv.getContext("2d"), viewport: viewport }).promise;
         bindPdfAnno(wrap, n);
         redrawPdfPage(n);
@@ -2660,7 +2672,7 @@
         const note = document.createElement("p");
         note.className = "empty-hint";
         note.textContent = "Showing first " + max + " of " + pdf.numPages + " pages.";
-        host.appendChild(note);
+        inner.appendChild(note);
       }
     } catch (err) {
       console.warn(err);
@@ -2761,10 +2773,18 @@
     if (!state.pdf) return;
     const next = Math.max(0.6, Math.min(3, z));
     state.pdf.viewZoom = next;
-    const host = $("pdf-pages");
-    if (host) host.style.setProperty("--pdf-zoom", String(next));
+    const inner = $("pdf-zoom-inner");
+    if (inner) {
+      inner.style.zoom = String(next);
+      inner.style.webkitTransform = "none";
+      inner.style.transform = "none";
+    }
     if ($("pdf-zoom-val")) $("pdf-zoom-val").textContent = Math.round(next * 100) + "%";
   }
+
+  window.addEventListener("touchmove", function (ev) {
+    if (state.pdf && state.pdf.inking) ev.preventDefault();
+  }, { passive: false });
 
   if ($("btn-pdf-zoom-in")) $("btn-pdf-zoom-in").addEventListener("click", () => setPdfZoom((state.pdf && state.pdf.viewZoom || 1) + 0.2));
   if ($("btn-pdf-zoom-out")) $("btn-pdf-zoom-out").addEventListener("click", () => setPdfZoom((state.pdf && state.pdf.viewZoom || 1) - 0.2));
@@ -2808,9 +2828,9 @@
       return Number.isFinite(n) && n > 0 ? n : 360;
     }
     function applyW(next) {
-      const w = Math.max(220, Math.min(window.innerWidth * 0.82, next));
+      const w = Math.max(220, Math.min(window.innerWidth * 0.7, next));
       document.body.style.setProperty("--pdf-w", w + "px");
-      if (panel) panel.style.width = w + "px";
+      if (panel) panel.style.width = "";
       invalidateMapSoon();
     }
     function onMove(ev) {
@@ -3544,7 +3564,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=59").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=60").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
