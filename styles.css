@@ -437,26 +437,27 @@ body.pdf-open .pdf-panel {
 .pdf-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px 6px 14px;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px 8px 3px 16px;
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
-  min-height: 40px;
+  min-height: 0;
 }
 .pdf-bar strong {
-  flex: 1;
+  flex: 1 1 80px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 11px;
 }
-.pdf-tools {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 6px 10px 8px 14px;
-  border-bottom: 1px solid var(--line);
+.pdf-panel .pdf-mini {
+  min-height: 26px;
+  min-width: 0;
+  padding: 2px 7px;
+  font-size: 11px;
+  line-height: 1.2;
 }
 .pdf-tool.is-on {
   background: #facc15;
@@ -475,6 +476,11 @@ body.pdf-open .pdf-panel {
 }
 body.pdf-inking .pdf-pages {
   overflow: hidden;
+  touch-action: none;
+}
+body.pdf-write-mode .pdf-anno,
+body.pdf-write-mode .pdf-page-wrap,
+body.pdf-write-mode .pdf-zoom-inner {
   touch-action: none;
 }
 .pdf-zoom-inner {

@@ -2510,6 +2510,7 @@
     if (!state.pdf) return;
     state.pdf.tool = tool || "pan";
     document.body.classList.toggle("pdf-pan", state.pdf.tool === "pan");
+    document.body.classList.toggle("pdf-write-mode", state.pdf.tool !== "pan");
     document.querySelectorAll(".pdf-tool").forEach((btn) => {
       btn.classList.toggle("is-on", btn.getAttribute("data-pdf-tool") === state.pdf.tool);
     });
@@ -2544,88 +2545,44 @@
   function isPencilEvent(ev) {
     if (!ev) return false;
     if (ev.pointerType === "pen") return true;
-    const t = (ev.touches && ev.touches[0]) || (ev.changedTouches && ev.changedTouches[0]);
-    if (t && (t.touchType === "stylus" || t.touchType === "direct" && ev.pointerType === "pen")) return true;
-    if (t && t.touchType === "stylus") return true;
+    const touches = ev.touches || ev.changedTouches;
+    if (touches) {
+      for (let i = 0; i < touches.length; i++) {
+        if (touches[i].touchType === "stylus") return true;
+      }
+    }
     return false;
   }
   function isFingerEvent(ev) {
     if (!ev) return false;
+    if (ev.pointerType === "pen") return false;
+    if (isPencilEvent(ev)) return false;
     if (ev.pointerType === "touch") return true;
-    const t = (ev.touches && ev.touches[0]) || (ev.changedTouches && ev.changedTouches[0]);
-    if (t && t.touchType === "direct") return true;
-    return ev.pointerType === "touch";
+    const t = ev.touches && ev.touches[0];
+    return !!(t && t.touchType === "direct");
   }
   function canWriteWith(ev) {
     if (!state.pdf || state.pdf.tool === "pan") return false;
-    if (isPencilEvent(ev)) return true;
+    if (isPencilEvent(ev) || ev.pointerType === "pen") return true;
     if (isFingerEvent(ev)) return false;
-    return ev.pointerType === "mouse" || ev.type.indexOf("mouse") === 0;
+    return ev.pointerType === "mouse" || !ev.pointerType;
   }
   function eventPosOnAnno(ev, anno) {
-    const src = ev;
     const r = anno.getBoundingClientRect();
-    return [(src.clientX - r.left) / r.width, (src.clientY - r.top) / r.height];
+    const w = r.width || 1;
+    const h = r.height || 1;
+    return [(ev.clientX - r.left) / w, (ev.clientY - r.top) / h];
+  }
+  function pageWrapAtPoint(x, y) {
+    const els = document.elementsFromPoint(x, y);
+    for (let i = 0; i < els.length; i++) {
+      const wrap = els[i].closest && els[i].closest(".pdf-page-wrap");
+      if (wrap) return wrap;
+    }
+    return null;
   }
   function bindPdfAnno(wrap, pageNo) {
-    const anno = wrap.querySelector(".pdf-anno");
-    if (!anno) return;
-    let drawing = null;
-    function start(ev) {
-      if (!canWriteWith(ev)) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      document.body.classList.add("pdf-inking");
-      if (state.pdf) state.pdf.inking = true;
-      if (anno.setPointerCapture && ev.pointerId != null) {
-        try { anno.setPointerCapture(ev.pointerId); } catch (_) {}
-      }
-      const p = eventPosOnAnno(ev, anno);
-      if (state.pdf.tool === "text") {
-        const text = window.prompt("Write on the PDF:", "");
-        if (text && text.trim()) {
-          state.pdf.annos.push({ type: "text", page: pageNo, x: p[0], y: p[1], text: text.trim(), color: "#111827" });
-          savePdfAnnos();
-          redrawPdfPage(pageNo);
-        }
-        return;
-      }
-      if (state.pdf.tool === "eraser") {
-        const hit = 0.03;
-        state.pdf.annos = (state.pdf.annos || []).filter((a) => {
-          if (a.page !== pageNo) return true;
-          if (a.type === "text") return Math.hypot(a.x - p[0], a.y - p[1]) > hit;
-          if (a.type === "path") return !(a.pts || []).some((q) => Math.hypot(q[0] - p[0], q[1] - p[1]) < hit);
-          return true;
-        });
-        savePdfAnnos();
-        redrawPdfPage(pageNo);
-        return;
-      }
-      drawing = { type: "path", page: pageNo, color: "#e11d48", width: 2.6, pts: [p] };
-    }
-    function move(ev) {
-      if (!drawing) return;
-      ev.preventDefault();
-      drawing.pts.push(eventPosOnAnno(ev, anno));
-      drawAnnoOn(anno.getContext("2d"), (state.pdf.annos || []).filter((a) => a.page === pageNo).concat([drawing]), anno.width, anno.height);
-    }
-    function end(ev) {
-      document.body.classList.remove("pdf-inking");
-      if (state.pdf) state.pdf.inking = false;
-      if (!drawing) return;
-      if (ev) ev.preventDefault();
-      if (drawing.pts.length > 1) {
-        state.pdf.annos.push(drawing);
-        savePdfAnnos();
-      }
-      drawing = null;
-      redrawPdfPage(pageNo);
-    }
-    anno.addEventListener("pointerdown", start);
-    anno.addEventListener("pointermove", move);
-    anno.addEventListener("pointerup", end);
-    anno.addEventListener("pointercancel", end);
+    wrap._pdfPageNo = pageNo;
   }
 
   async function renderPdfPages(bytes) {
@@ -2705,8 +2662,8 @@
     setPdfVisible(true);
     setPdfTool("pen");
     await renderPdfPages(bytes);
-    if (!opts.fromStore) persistOpenedFile("pdf", id, file, { bytes: bytes, name: name });
     setPdfZoom(state.pdf.viewZoom || 1);
+    if (!opts.fromStore) persistOpenedFile("pdf", id, file, { bytes: bytes, name: name });
     setStatus("Opened PDF: " + name + ". Finger moves/zooms. Apple Pencil writes.", "ok");
   }
 
@@ -2769,49 +2726,174 @@
     });
   }
 
-  function setPdfZoom(z) {
+  function visiblePdfPage() {
+    const host = $("pdf-pages");
+    if (!host) return null;
+    const pages = host.querySelectorAll(".pdf-page-wrap");
+    if (!pages.length) return null;
+    const mid = host.scrollTop + host.clientHeight * 0.35;
+    let found = pages[0];
+    pages.forEach((p) => { if (p.offsetTop <= mid) found = p; });
+    return found;
+  }
+  function restorePdfPage(el) {
+    const host = $("pdf-pages");
+    if (!host || !el) return;
+    host.scrollTop = el.offsetTop;
+  }
+  function setPdfZoom(z, anchor) {
     if (!state.pdf) return;
-    const next = Math.max(0.6, Math.min(3, z));
-    state.pdf.viewZoom = next;
+    const host = $("pdf-pages");
     const inner = $("pdf-zoom-inner");
+    const keep = anchor || visiblePdfPage();
+    const next = Math.max(0.6, Math.min(3, Number(z) || 1));
+    state.pdf.viewZoom = next;
     if (inner) {
-      inner.style.zoom = String(next);
-      inner.style.webkitTransform = "none";
-      inner.style.transform = "none";
+      inner.style.zoom = "";
+      inner.style.transform = "scale(" + next + ")";
+      inner.style.transformOrigin = "0 0";
+      inner.style.width = "100%";
+      const baseH = inner.scrollHeight || inner.offsetHeight || 0;
+      const baseW = inner.scrollWidth || inner.offsetWidth || 0;
+      inner.style.marginBottom = Math.max(0, baseH * (next - 1)) + "px";
+      inner.style.marginRight = Math.max(0, baseW * (next - 1)) + "px";
     }
     if ($("pdf-zoom-val")) $("pdf-zoom-val").textContent = Math.round(next * 100) + "%";
+    if (keep) restorePdfPage(keep);
   }
 
   window.addEventListener("touchmove", function (ev) {
     if (state.pdf && state.pdf.inking) ev.preventDefault();
   }, { passive: false });
 
-  if ($("btn-pdf-zoom-in")) $("btn-pdf-zoom-in").addEventListener("click", () => setPdfZoom((state.pdf && state.pdf.viewZoom || 1) + 0.2));
-  if ($("btn-pdf-zoom-out")) $("btn-pdf-zoom-out").addEventListener("click", () => setPdfZoom((state.pdf && state.pdf.viewZoom || 1) - 0.2));
+  if ($("btn-pdf-zoom-in")) $("btn-pdf-zoom-in").addEventListener("click", () => setPdfZoom((state.pdf && state.pdf.viewZoom || 1) + 0.25));
+  if ($("btn-pdf-zoom-out")) $("btn-pdf-zoom-out").addEventListener("click", () => setPdfZoom((state.pdf && state.pdf.viewZoom || 1) - 0.25));
 
-  (function setupPdfPinchZoom() {
+  (function setupPdfInteract() {
     const host = $("pdf-pages");
     if (!host) return;
+    let drawing = null;
+    let pan = null;
     let pinch = null;
-    function dist(ev) {
-      const a = ev.touches[0], b = ev.touches[1];
-      return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    function touchDist(ev) {
+      if (!ev.touches || ev.touches.length < 2) return 0;
+      return Math.hypot(ev.touches[0].clientX - ev.touches[1].clientX, ev.touches[0].clientY - ev.touches[1].clientY);
     }
-    host.addEventListener("touchstart", (ev) => {
-      if (!state.pdf || ev.touches.length !== 2) { pinch = null; return; }
-      if ((ev.touches[0].touchType === "stylus") || (ev.touches[1].touchType === "stylus")) return;
-      pinch = { d: dist(ev), z: state.pdf.viewZoom || 1 };
-    }, { passive: true });
-    host.addEventListener("touchmove", (ev) => {
-      if (!pinch || ev.touches.length !== 2) return;
+    function beginWrite(ev, wrap) {
+      const pageNo = Number(wrap.getAttribute("data-page"));
+      const anno = wrap.querySelector(".pdf-anno");
+      if (!anno) return;
+      document.body.classList.add("pdf-inking");
+      state.pdf.inking = true;
+      const p = eventPosOnAnno(ev, anno);
+      if (state.pdf.tool === "text") {
+        const text = window.prompt("Write on the PDF:", "");
+        if (text && text.trim()) {
+          state.pdf.annos.push({ type: "text", page: pageNo, x: p[0], y: p[1], text: text.trim(), color: "#111827" });
+          savePdfAnnos();
+          redrawPdfPage(pageNo);
+        }
+        state.pdf.inking = false;
+        document.body.classList.remove("pdf-inking");
+        return;
+      }
+      if (state.pdf.tool === "eraser") {
+        const hit = 0.03;
+        state.pdf.annos = (state.pdf.annos || []).filter((a) => {
+          if (a.page !== pageNo) return true;
+          if (a.type === "text") return Math.hypot(a.x - p[0], a.y - p[1]) > hit;
+          if (a.type === "path") return !(a.pts || []).some((q) => Math.hypot(q[0] - p[0], q[1] - p[1]) < hit);
+          return true;
+        });
+        savePdfAnnos();
+        redrawPdfPage(pageNo);
+        state.pdf.inking = false;
+        document.body.classList.remove("pdf-inking");
+        return;
+      }
+      drawing = { type: "path", page: pageNo, color: "#e11d48", width: 2.6, pts: [p], wrap: wrap, anno: anno };
+    }
+    function moveWrite(ev) {
+      if (!drawing) return;
       ev.preventDefault();
-      setPdfZoom(pinch.z * (dist(ev) / pinch.d));
+      drawing.pts.push(eventPosOnAnno(ev, drawing.anno));
+      drawAnnoOn(drawing.anno.getContext("2d"), (state.pdf.annos || []).filter((a) => a.page === drawing.page).concat([drawing]), drawing.anno.width, drawing.anno.height);
+    }
+    function endWrite() {
+      if (drawing && drawing.pts.length > 1) {
+        const rec = { type: "path", page: drawing.page, color: drawing.color, width: drawing.width, pts: drawing.pts };
+        state.pdf.annos.push(rec);
+        savePdfAnnos();
+        redrawPdfPage(drawing.page);
+      }
+      drawing = null;
+      if (state.pdf) state.pdf.inking = false;
+      document.body.classList.remove("pdf-inking");
+    }
+    host.addEventListener("pointerdown", (ev) => {
+      if (!state.pdf) return;
+      if (ev.pointerType === "touch" && !isPencilEvent(ev)) {
+        pan = { id: ev.pointerId, y: ev.clientY, x: ev.clientX, top: host.scrollTop, left: host.scrollLeft };
+        return;
+      }
+      if (!canWriteWith(ev)) return;
+      const wrap = ev.target.closest(".pdf-page-wrap") || pageWrapAtPoint(ev.clientX, ev.clientY);
+      if (!wrap) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      try { host.setPointerCapture(ev.pointerId); } catch (_) {}
+      beginWrite(ev, wrap);
     }, { passive: false });
-    host.addEventListener("touchend", () => { pinch = null; });
+    host.addEventListener("pointermove", (ev) => {
+      if (drawing) { moveWrite(ev); return; }
+      if (pan && ev.pointerId === pan.id && ev.pointerType === "touch") {
+        host.scrollTop = pan.top - (ev.clientY - pan.y);
+        host.scrollLeft = pan.left - (ev.clientX - pan.x);
+      }
+    });
+    function stopPan(ev) {
+      if (pan && ev && ev.pointerId === pan.id) pan = null;
+      if (drawing) endWrite();
+    }
+    host.addEventListener("pointerup", stopPan);
+    host.addEventListener("pointercancel", (ev) => {
+      if (drawing && (ev.pointerType === "pen" || isPencilEvent(ev))) {
+        ev.preventDefault();
+        return;
+      }
+      stopPan(ev);
+    });
+    host.addEventListener("touchstart", (ev) => {
+      if (!state.pdf) return;
+      if (ev.touches.length === 2) {
+        pinch = { d: touchDist(ev), z: state.pdf.viewZoom || 1, page: visiblePdfPage() };
+        pan = null;
+        return;
+      }
+      const stylus = ev.touches[0] && ev.touches[0].touchType === "stylus";
+      if (stylus && canWriteWith(ev)) {
+        ev.preventDefault();
+        const t = ev.touches[0];
+        const wrap = pageWrapAtPoint(t.clientX, t.clientY);
+        if (wrap) beginWrite({ clientX: t.clientX, clientY: t.clientY, pointerType: "pen" }, wrap);
+      }
+    }, { passive: false });
+    host.addEventListener("touchmove", (ev) => {
+      if (pinch && ev.touches.length === 2) {
+        ev.preventDefault();
+        setPdfZoom(pinch.z * (touchDist(ev) / (pinch.d || 1)), pinch.page);
+        return;
+      }
+      if (drawing && ev.touches[0] && ev.touches[0].touchType === "stylus") {
+        ev.preventDefault();
+        moveWrite({ clientX: ev.touches[0].clientX, clientY: ev.touches[0].clientY });
+      }
+    }, { passive: false });
+    host.addEventListener("touchend", () => { pinch = null; if (drawing) endWrite(); });
     host.addEventListener("wheel", (ev) => {
       if (!state.pdf || !(ev.ctrlKey || ev.metaKey)) return;
       ev.preventDefault();
-      setPdfZoom((state.pdf.viewZoom || 1) + (ev.deltaY < 0 ? 0.1 : -0.1));
+      setPdfZoom((state.pdf.viewZoom || 1) + (ev.deltaY < 0 ? 0.12 : -0.12));
     }, { passive: false });
   })();
 
@@ -2821,6 +2903,7 @@
     if (!handle) return;
     let startX = 0;
     let startW = 380;
+    let lockPage = null;
     function widthNow() {
       if (panel && panel.offsetWidth) return panel.offsetWidth;
       const v = getComputedStyle(document.body).getPropertyValue("--pdf-w").trim();
@@ -2831,6 +2914,7 @@
       const w = Math.max(220, Math.min(window.innerWidth * 0.7, next));
       document.body.style.setProperty("--pdf-w", w + "px");
       if (panel) panel.style.width = "";
+      if (lockPage) restorePdfPage(lockPage);
       invalidateMapSoon();
     }
     function onMove(ev) {
@@ -2848,6 +2932,7 @@
       ev.stopPropagation();
       startX = ev.clientX;
       startW = widthNow();
+      lockPage = visiblePdfPage();
       if (handle.setPointerCapture) handle.setPointerCapture(ev.pointerId);
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
@@ -3564,7 +3649,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=60").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=61").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
