@@ -1731,16 +1731,51 @@
       - (1 + 2 * T + C) * Math.pow(D, 3) / 6
       + (5 - 2 * C + 28 * T - 3 * C * C + 8 * ep2 + 24 * T * T) * Math.pow(D, 5) / 120
     ) / cosp;
-    const lat = phi * 180 / Math.PI - 5.5 / 3600;
-    const lon = lam * 180 / Math.PI + 8.8 / 3600;
-    return [lon, lat];
+    const lon80 = lam * 180 / Math.PI;
+    const lat80 = phi * 180 / Math.PI;
+    const aI = 6378388.0;
+    const fI = 1 / 297.0;
+    const e2I = 2 * fI - fI * fI;
+    const φ = lat80 * Math.PI / 180;
+    const λ = lon80 * Math.PI / 180;
+    const NI = aI / Math.sqrt(1 - e2I * Math.sin(φ) * Math.sin(φ));
+    let x = NI * Math.cos(φ) * Math.cos(λ);
+    let y = NI * Math.cos(φ) * Math.sin(λ);
+    let z = NI * (1 - e2I) * Math.sin(φ);
+    x += -162.619;
+    y += -276.959;
+    z += -161.764;
+    const aW = 6378137.0;
+    const fW = 1 / 298.257223563;
+    const e2W = 2 * fW - fW * fW;
+    const lon = Math.atan2(y, x);
+    const p = Math.hypot(x, y);
+    let lat = Math.atan2(z, p * (1 - e2W));
+    for (let i = 0; i < 10; i++) {
+      const Nw = aW / Math.sqrt(1 - e2W * Math.sin(lat) * Math.sin(lat));
+      lat = Math.atan2(z + e2W * Nw * Math.sin(lat), p);
+    }
+    return [lon * 180 / Math.PI, lat * 180 / Math.PI];
   }
 
   function findHkGridFields(props) {
     const keys = Object.keys(props || {});
-    const eKey = keys.find((k) => /easting/i.test(k) && !/lat|lon|wgs/i.test(k));
-    const nKey = keys.find((k) => /northing/i.test(k) && !/lat|lon|wgs/i.test(k));
-    return { eKey: eKey || null, nKey: nKey || null };
+    const skip = /lat|lon|lng|wgs|latu|long/i;
+    const eKey = keys.find((k) => /^(easting|east|x|e|coordx|coord_x|hk_?e)$/i.test(String(k).trim()) && !skip.test(k))
+      || keys.find((k) => /easting/i.test(k) && !skip.test(k));
+    const nKey = keys.find((k) => /^(northing|north|y|n|coordy|coord_y|hk_?n)$/i.test(String(k).trim()) && !skip.test(k))
+      || keys.find((k) => /northing/i.test(k) && !skip.test(k));
+    if (eKey && nKey) return { eKey: eKey, nKey: nKey };
+    const nums = keys.filter((k) => isFinite(parseFloat(props[k])));
+    for (let i = 0; i < nums.length; i++) {
+      for (let j = 0; j < nums.length; j++) {
+        if (i === j) continue;
+        const ev = parseFloat(props[nums[i]]);
+        const nv = parseFloat(props[nums[j]]);
+        if (looksLikeHkGrid(ev, nv)) return { eKey: nums[i], nKey: nums[j] };
+      }
+    }
+    return { eKey: null, nKey: null };
   }
 
   function applyHk1980IfNeeded(features) {
@@ -1766,10 +1801,8 @@
       }
       if (!isFinite(e) || !isFinite(nn) || !looksLikeHkGrid(e, nn)) return;
       const wgs = hk1980GridToWgs84(e, nn);
-      if (!g || g.type === "Point") {
-        ft.geometry = { type: "Point", coordinates: wgs };
-        n += 1;
-      }
+      ft.geometry = { type: "Point", coordinates: wgs };
+      n += 1;
     });
     return n;
   }
@@ -2437,7 +2470,34 @@
     if (n.endsWith(".pdf") || t === "application/pdf") return openPdfFile(file);
     if (n.endsWith(".osm") || n.endsWith(".osm.xml")) return openOsmBasemap(file);
     if (n.endsWith(".geojson") || n.endsWith(".json")) return openGeoJsonFile(file);
+    if (n.endsWith(".csv") || n.endsWith(".tsv") || t === "text/csv") return openCsvPoints(file);
     return openGpkgFile(file);
+  }
+
+  async function openCsvPoints(file) {
+    const text = await file.text();
+    const raw = text.replace(/^\uFEFF/, "");
+    const lines = raw.split(/\r?\n/).filter((ln) => ln.trim());
+    if (lines.length < 2) throw new Error("CSV has no rows.");
+    const delim = lines[0].indexOf("\t") >= 0 && lines[0].split("\t").length > lines[0].split(",").length ? "\t" : ",";
+    const header = lines[0].split(delim).map((h) => h.trim().replace(/^;/, ""));
+    const features = [];
+    for (let i = 1; i < lines.length; i++) {
+      const parts = lines[i].split(delim);
+      const props = {};
+      header.forEach((h, j) => { props[h] = String(parts[j] == null ? "" : parts[j]).trim().replace(/^;/, ""); });
+      const fields = findHkGridFields(props);
+      const e = fields.eKey ? parseFloat(props[fields.eKey]) : NaN;
+      const nn = fields.nKey ? parseFloat(props[fields.nKey]) : NaN;
+      if (!looksLikeHkGrid(e, nn)) continue;
+      features.push({ type: "Feature", properties: props, geometry: { type: "Point", coordinates: [e, nn] } });
+    }
+    if (!features.length) {
+      setStatus("No HK1980 X/Y points found in this CSV.", "warn");
+      return;
+    }
+    const json = new File([JSON.stringify({ type: "FeatureCollection", features: features })], file.name.replace(/\.[^.]+$/, "") + ".geojson", { type: "application/geo+json" });
+    return openGeoJsonFile(json);
   }
 
   function invalidateMapSoon() {
@@ -2685,7 +2745,7 @@
       const n = (f.name || "").toLowerCase();
       return n.endsWith(".gpkg") || n.endsWith(".gpkg.zip") || n.endsWith(".sqlite") ||
         n.endsWith(".db") || n.endsWith(".zip") || n.endsWith(".geojson") || n.endsWith(".json") ||
-        n.endsWith(".osm") || n.endsWith(".osm.xml") || n.endsWith(".pdf") ||
+        n.endsWith(".osm") || n.endsWith(".osm.xml") || n.endsWith(".pdf") || n.endsWith(".csv") || n.endsWith(".tsv") ||
         f.type === "application/geopackage+sqlite3" || f.type === "application/geo+json" ||
         f.type === "application/json" || f.type === "application/pdf";
     });
@@ -3837,7 +3897,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=64").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=65").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
