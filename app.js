@@ -547,7 +547,40 @@
     return opener.call(api, bytes);
   }
 
+  function skipGpkgReproject(gp, tableName) {
+    try {
+      const dao = gp.getFeatureDao(tableName);
+      if (dao && dao.srs) {
+        dao.srs.definition = undefined;
+        dao.srs.organization_coordsys_id = 4326;
+      }
+    } catch (_) {}
+  }
+
+  function normalizePointFeature(ft) {
+    if (!ft) return ft;
+    if (!ft.geometry && ft.coordinates) {
+      ft = { type: "Feature", properties: ft.properties || {}, geometry: { type: "Point", coordinates: ft.coordinates } };
+    }
+    const g = ft.geometry;
+    if (!g || g.type !== "Point") return ft;
+    let c = g.coordinates;
+    if (c && !Array.isArray(c) && typeof c === "object") {
+      c = [c.x != null ? c.x : c.lon != null ? c.lon : c.lng, c.y != null ? c.y : c.lat];
+    }
+    if (Array.isArray(c) && c.length >= 2) {
+      let x = Number(c[0]);
+      let y = Number(c[1]);
+      if (x > 15 && x < 30 && y > 100 && y < 130) {
+        const t = x; x = y; y = t;
+      }
+      g.coordinates = [x, y];
+    }
+    return ft;
+  }
+
   function iterateFeatures(geoPackage, tableName) {
+    skipGpkgReproject(geoPackage, tableName);
     if (typeof geoPackage.iterateGeoJSONFeatures === "function") {
       return geoPackage.iterateGeoJSONFeatures(tableName);
     }
@@ -1842,9 +1875,9 @@
       try {
         if (rs && typeof rs[Symbol.iterator] === "function") {
           for (const feat of rs) {
-            if (feat && feat.type === "Feature") features.push(feat);
-            else if (feat && feat.geometry) features.push(feat);
-            else if (feat && feat.value && feat.value.geometry) features.push(feat.value);
+            if (feat && feat.type === "Feature") features.push(normalizePointFeature(feat));
+            else if (feat && feat.geometry) features.push(normalizePointFeature(feat));
+            else if (feat && feat.value && feat.value.geometry) features.push(normalizePointFeature(feat.value));
             if (features.length >= limit) {
               truncated = true;
               break;
@@ -1852,7 +1885,7 @@
           }
         } else if (Array.isArray(rs)) {
           for (const feat of rs) {
-            if (feat) features.push(feat);
+            if (feat) features.push(normalizePointFeature(feat));
             if (features.length >= limit) {
               truncated = true;
               break;
@@ -3897,7 +3930,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=65").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=66").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
