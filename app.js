@@ -1766,29 +1766,7 @@
     ) / cosp;
     const lon80 = lam * 180 / Math.PI;
     const lat80 = phi * 180 / Math.PI;
-    const aI = 6378388.0;
-    const fI = 1 / 297.0;
-    const e2I = 2 * fI - fI * fI;
-    const φ = lat80 * Math.PI / 180;
-    const λ = lon80 * Math.PI / 180;
-    const NI = aI / Math.sqrt(1 - e2I * Math.sin(φ) * Math.sin(φ));
-    let x = NI * Math.cos(φ) * Math.cos(λ);
-    let y = NI * Math.cos(φ) * Math.sin(λ);
-    let z = NI * (1 - e2I) * Math.sin(φ);
-    x += -162.619;
-    y += -276.959;
-    z += -161.764;
-    const aW = 6378137.0;
-    const fW = 1 / 298.257223563;
-    const e2W = 2 * fW - fW * fW;
-    const lon = Math.atan2(y, x);
-    const p = Math.hypot(x, y);
-    let lat = Math.atan2(z, p * (1 - e2W));
-    for (let i = 0; i < 10; i++) {
-      const Nw = aW / Math.sqrt(1 - e2W * Math.sin(lat) * Math.sin(lat));
-      lat = Math.atan2(z + e2W * Nw * Math.sin(lat), p);
-    }
-    return [lon * 180 / Math.PI, lat * 180 / Math.PI];
+    return [lon80 + 8.8 / 3600, lat80 - 5.5 / 3600];
   }
 
   function findHkGridFields(props) {
@@ -3930,7 +3908,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=66").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=67").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
