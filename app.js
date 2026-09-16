@@ -3661,11 +3661,152 @@
     setStatus("Exported " + rows.length + " trees to " + name + ".", "ok");
   }
 
+  function catalogAllColumns(layer) {
+    const set = new Set();
+    (layer.columns || []).forEach((k) => { if (k && k.charAt(0) !== "_") set.add(k); });
+    (layer.features || []).forEach((ft) => {
+      Object.keys(ft.properties || {}).forEach((k) => { if (k && k.charAt(0) !== "_") set.add(k); });
+    });
+    (state.extraCols || []).forEach((k) => { if (k) set.add(k); });
+    return Array.from(set);
+  }
+
+  function buildColumnsXlsx(headers, rows) {
+    const lastCol = excelColLetter(Math.max(1, headers.length));
+    const lastRow = Math.max(1, rows.length + 1);
+    let sheet = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+    sheet += '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">';
+    sheet += '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>';
+    sheet += "<cols>";
+    headers.forEach((_, i) => {
+      sheet += '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="18" customWidth="1"/>';
+    });
+    sheet += "</cols><sheetData>";
+    sheet += '<row r="1">';
+    headers.forEach((h, i) => {
+      sheet += inventoryCellXml(1, excelColLetter(i + 1), h, 1);
+    });
+    sheet += "</row>";
+    rows.forEach((row, ri) => {
+      const r = ri + 2;
+      sheet += '<row r="' + r + '">';
+      row.forEach((val, i) => {
+        sheet += inventoryCellXml(r, excelColLetter(i + 1), val, 2);
+      });
+      sheet += "</row>";
+    });
+    sheet += "</sheetData>";
+    sheet += '<autoFilter ref="A1:' + lastCol + lastRow + '"/></worksheet>';
+    const styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>' +
+      '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>' +
+      '<borders count="2"><border/><border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/></border></borders>' +
+      '<cellStyleXfs count="1"><xf/></cellStyleXfs>' +
+      '<cellXfs count="3"><xf/><xf fontId="1" applyFont="1"/><xf borderId="1" applyBorder="1"/></cellXfs></styleSheet>';
+    const workbook = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<sheets><sheet name="Catalog" sheetId="1" r:id="rId1"/></sheets></workbook>';
+    const wbRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+      '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+      "</Relationships>";
+    const rootRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+      "</Relationships>";
+    const types = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+      '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+      '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+      "</Types>";
+    const packed = zipStore([
+      { name: "[Content_Types].xml", data: types },
+      { name: "_rels/.rels", data: rootRels },
+      { name: "xl/workbook.xml", data: workbook },
+      { name: "xl/_rels/workbook.xml.rels", data: wbRels },
+      { name: "xl/styles.xml", data: styles },
+      { name: "xl/worksheets/sheet1.xml", data: sheet }
+    ]);
+    return new Blob([packed], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  }
+
+  function closeColExport() {
+    const mask = $("col-export-mask");
+    if (mask) mask.hidden = true;
+  }
+
+  function openColExportPicker() {
+    const found = currentCatalogLayer();
+    if (!found || !found.layer || !found.layer.features || !found.layer.features.length) {
+      setStatus("Open a catalog first, then export columns.", "warn");
+      return;
+    }
+    const cols = catalogAllColumns(found.layer);
+    if (!cols.length) {
+      setStatus("No columns to export.", "warn");
+      return;
+    }
+    let saved = [];
+    try { saved = JSON.parse(localStorage.getItem("gpkg-viewer-export-cols") || "[]"); } catch (_) {}
+    const savedSet = new Set(Array.isArray(saved) ? saved : []);
+    const list = $("col-export-list");
+    const useSaved = saved.some((c) => cols.indexOf(c) >= 0);
+    list.innerHTML = cols.map((c) => {
+      const on = useSaved ? savedSet.has(c) : true;
+      return "<label><input type='checkbox' value='" + escapeHtml(c) + "'" + (on ? " checked" : "") + "/> " + escapeHtml(c) + "</label>";
+    }).join("");
+    $("col-export-mask").hidden = false;
+  }
+
+  async function exportSelectedColumns() {
+    const found = currentCatalogLayer();
+    if (!found || !found.layer) {
+      setStatus("Open a catalog first.", "warn");
+      return;
+    }
+    const picks = Array.from(document.querySelectorAll("#col-export-list input[type=checkbox]:checked")).map((el) => el.value);
+    if (!picks.length) {
+      setStatus("Select at least one column.", "warn");
+      return;
+    }
+    try { localStorage.setItem("gpkg-viewer-export-cols", JSON.stringify(picks)); } catch (_) {}
+    const layer = found.layer;
+    const idxs = sortedCatalogIndexes(layer);
+    const rows = idxs.map((i) => {
+      const props = layer.features[i].properties || {};
+      return picks.map((col) => (props[col] == null ? "" : props[col]));
+    });
+    const blob = buildColumnsXlsx(picks, rows);
+    const locName = (found.file && found.file.name ? found.file.name.replace(/\.(gpkg|geojson|json|csv)$/i, "") : "") || layer.tableName || "catalog";
+    const name = locName + "-columns.xlsx";
+    await downloadBlob(blob, name, [{ description: "Excel", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }]);
+    closeColExport();
+    setStatus("Exported " + picks.length + " columns × " + rows.length + " rows.", "ok");
+  }
+
   if ($("btn-save-as")) $("btn-save-as").addEventListener("click", saveAsNewFile);
   if ($("btn-save-as-2")) $("btn-save-as-2").addEventListener("click", saveAsNewFile);
   if ($("btn-export-xlsx")) $("btn-export-xlsx").addEventListener("click", exportCatalogExcel);
   if ($("btn-export-xlsx-2")) $("btn-export-xlsx-2").addEventListener("click", exportCatalogExcel);
   if ($("btn-export-xlsx-3")) $("btn-export-xlsx-3").addEventListener("click", exportCatalogExcel);
+  if ($("btn-export-cols")) $("btn-export-cols").addEventListener("click", openColExportPicker);
+  if ($("btn-export-cols-2")) $("btn-export-cols-2").addEventListener("click", openColExportPicker);
+  if ($("btn-col-export-all")) $("btn-col-export-all").addEventListener("click", () => {
+    document.querySelectorAll("#col-export-list input[type=checkbox]").forEach((el) => { el.checked = true; });
+  });
+  if ($("btn-col-export-none")) $("btn-col-export-none").addEventListener("click", () => {
+    document.querySelectorAll("#col-export-list input[type=checkbox]").forEach((el) => { el.checked = false; });
+  });
+  if ($("btn-col-export-cancel")) $("btn-col-export-cancel").addEventListener("click", closeColExport);
+  if ($("btn-col-export-go")) $("btn-col-export-go").addEventListener("click", exportSelectedColumns);
+  if ($("col-export-mask")) $("col-export-mask").addEventListener("click", (e) => {
+    if (e.target.id === "col-export-mask") closeColExport();
+  });
   if ($("btn-add-spot")) $("btn-add-spot").addEventListener("click", () => setAddSpotMode(!state.addSpotMode));
   if ($("add-spot-field")) {
     $("add-spot-field").addEventListener("change", (e) => {
@@ -3908,7 +4049,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=67").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=68").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||

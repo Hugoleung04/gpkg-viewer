@@ -12,8 +12,8 @@
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="icon" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="vendor/leaflet.css?v=67" />
-  <link rel="stylesheet" href="styles.css?v=67" />
+  <link rel="stylesheet" href="vendor/leaflet.css?v=68" />
+  <link rel="stylesheet" href="styles.css?v=68" />
 </head>
 <body>
   <header class="topbar">
@@ -21,7 +21,7 @@
     <div class="brand">
       <div class="logo" aria-hidden="true"></div>
       <div>
-        GeoPackage Viewer <span class="ver">v1.57</span>
+        GeoPackage Viewer <span class="ver">v1.58</span>
         <small>Phone + computer — files stay on this device</small>
       </div>
     </div>
@@ -126,7 +126,8 @@
       <button class="btn full" id="btn-reset-spot" type="button">Reset to original</button>
       <button class="btn full danger" id="btn-delete-spot" type="button">Delete this spot</button>
       <button class="btn full" id="btn-save-as-2" type="button">Save as new file</button>
-      <button class="btn full" id="btn-export-xlsx-2" type="button">Export catalog (Excel)</button>
+      <button class="btn full" id="btn-export-xlsx-2" type="button">Export catalog (template)</button>
+      <button class="btn full" id="btn-export-cols-2" type="button">Export selected columns</button>
     </div>
 
     <details class="settings-card extras">
@@ -173,7 +174,8 @@
       </label>
       <button class="btn" id="btn-sort-dir" type="button">A→Z</button>
       <button class="btn" id="btn-cols" type="button">Columns</button>
-      <button class="btn" id="btn-export-xlsx-3" type="button">Export</button>
+      <button class="btn" id="btn-export-xlsx-3" type="button">Export template</button>
+      <button class="btn" id="btn-export-cols" type="button">Export columns</button>
       <button class="btn" id="btn-add-col-2" type="button">+ Column</button>
       <button class="btn danger" id="btn-delete-row" type="button">Delete</button>
       <span class="table-hint">Drag the bar above to resize · double-click a cell to edit</span>
@@ -184,9 +186,24 @@
     </div>
   </section>
 
-  <script src="vendor/leaflet.js?v=67"></script>
-  <script src="vendor/geopackage.min.js?v=67"></script>
-  <script src="vendor/pdf.min.js?v=67"></script>
-  <script src="app.js?v=67"></script>
+  <div class="col-export-mask" id="col-export-mask" hidden>
+    <div class="col-export-card" role="dialog" aria-labelledby="col-export-title">
+      <strong id="col-export-title">Export selected columns</strong>
+      <p class="hint">Tick the columns to include in the Excel file.</p>
+      <div class="col-export-list" id="col-export-list"></div>
+      <div class="col-export-actions">
+        <button class="btn" id="btn-col-export-all" type="button">All</button>
+        <button class="btn" id="btn-col-export-none" type="button">None</button>
+        <span class="spacer"></span>
+        <button class="btn" id="btn-col-export-cancel" type="button">Cancel</button>
+        <button class="btn btn-primary" id="btn-col-export-go" type="button">Export Excel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="vendor/leaflet.js?v=68"></script>
+  <script src="vendor/geopackage.min.js?v=68"></script>
+  <script src="vendor/pdf.min.js?v=68"></script>
+  <script src="app.js?v=68"></script>
 </body>
 </html>
