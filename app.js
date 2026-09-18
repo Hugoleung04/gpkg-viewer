@@ -1232,6 +1232,19 @@
     box.hidden = false;
     if ($("edit-hint")) $("edit-hint").hidden = true;
     $("edit-id").textContent = labelText(m.feature, state.labelField) || "(no ID)";
+    if ($("edit-coords")) {
+      const p = m.feature.properties || {};
+      const parts = [];
+      const gf = findHkGridFields(p);
+      if (gf.eKey && gf.nKey && p[gf.eKey] !== "" && p[gf.nKey] !== "") {
+        parts.push(gf.eKey + " " + p[gf.eKey] + "  " + gf.nKey + " " + p[gf.nKey]);
+      }
+      if (typeof m.getLatLng === "function") {
+        const ll = m.getLatLng();
+        parts.push(ll.lat.toFixed(6) + ", " + ll.lng.toFixed(6) + " (WGS84)");
+      }
+      $("edit-coords").textContent = parts.join("  ·  ");
+    }
     const ly = parentLayerOf(m);
     if ($("spot-color")) {
       $("spot-color").value = featureColor(m, (ly && ly.color) || "#3b82f6");
@@ -1429,7 +1442,19 @@
     if (typeof m.getLatLng === "function" && m.feature) {
       const ll = m.getLatLng();
       m.feature.geometry = { type: "Point", coordinates: [ll.lng, ll.lat] };
+      m.feature.properties = m.feature.properties || {};
+      let ly = null;
+      state.files.forEach((f) => f.layers.forEach((layer) => {
+        if (layer.leafletLayer && layer.leafletLayer.hasLayer && layer.leafletLayer.hasLayer(m)) ly = layer;
+      }));
+      writeCoordsToProps(m.feature.properties, ly, ll.lat, ll.lng);
+      if (ly && ly.features) {
+        ly.features.forEach((ft) => {
+          if (ft === m.feature) writeCoordsToProps(ft.properties || (ft.properties = {}), ly, ll.lat, ll.lng);
+        });
+      }
       bindFeatureLabel(m);
+      if (ly) renderTable(ly);
       persistColorEdits();
       refreshEditPanel();
       updateFocusRing(m);
@@ -1556,6 +1581,7 @@
     const props = { _added: true, _addedId: "add-" + Date.now() + "-" + Math.floor(Math.random() * 9999) };
     allCatalogColumns(found.layer).forEach((c) => { props[c] = props[c] || ""; });
     props[field] = name;
+    writeCoordsToProps(props, found.layer, latlng.lat, latlng.lng);
     const marker = placeSpotOnLayer(found.file, found.layer, latlng.lat, latlng.lng, props, false);
     if ($("add-spot-name")) $("add-spot-name").value = "";
     refreshLabelFieldOptions();
@@ -1767,6 +1793,87 @@
     const lon80 = lam * 180 / Math.PI;
     const lat80 = phi * 180 / Math.PI;
     return [lon80 + 8.8 / 3600, lat80 - 5.5 / 3600];
+  }
+
+  function wgs84ToHk1980Grid(lonWgs, latWgs) {
+    const lon80 = lonWgs - 8.8 / 3600;
+    const lat80 = latWgs + 5.5 / 3600;
+    const a = 6378388.0;
+    const f = 1 / 297.0;
+    const e2 = 2 * f - f * f;
+    const lat0 = 22.3121333333333 * Math.PI / 180;
+    const lon0 = 114.178555555556 * Math.PI / 180;
+    const FE = 836694.05;
+    const FN = 819069.80;
+    const k0 = 1;
+    function mer(phi) {
+      const e4 = e2 * e2;
+      const e6 = e4 * e2;
+      const A0 = 1 - e2 / 4 - 3 * e4 / 64 - 5 * e6 / 256;
+      const A2 = (3 / 8) * (e2 + e4 / 4 + 15 * e6 / 128);
+      const A4 = (15 / 256) * (e4 + 3 * e6 / 4);
+      const A6 = 35 * e6 / 3072;
+      return a * (A0 * phi - A2 * Math.sin(2 * phi) + A4 * Math.sin(4 * phi) - A6 * Math.sin(6 * phi));
+    }
+    const phi = lat80 * Math.PI / 180;
+    const lam = lon80 * Math.PI / 180;
+    const sinp = Math.sin(phi);
+    const cosp = Math.cos(phi);
+    const tanp = Math.tan(phi);
+    const ep2 = e2 / (1 - e2);
+    const nu = a / Math.sqrt(1 - e2 * sinp * sinp);
+    const rho = a * (1 - e2) / Math.pow(1 - e2 * sinp * sinp, 1.5);
+    const T = tanp * tanp;
+    const C = ep2 * cosp * cosp;
+    const A = (lam - lon0) * cosp;
+    const M = mer(phi);
+    const M0 = mer(lat0);
+    const east = FE + k0 * nu * (
+      A + (1 - T + C) * Math.pow(A, 3) / 6 +
+      (5 - 18 * T + T * T + 72 * C - 58 * ep2) * Math.pow(A, 5) / 120
+    );
+    const north = FN + k0 * (
+      (M - M0) + nu * tanp * (
+        A * A / 2 +
+        (5 - T + 9 * C + 4 * C * C) * Math.pow(A, 4) / 24 +
+        (61 - 58 * T + T * T + 600 * C - 330 * ep2) * Math.pow(A, 6) / 720
+      )
+    );
+    return [east, north];
+  }
+
+  function writeCoordsToProps(props, layer, lat, lng) {
+    if (!props || !isFinite(lat) || !isFinite(lng)) return props;
+    const sample = {};
+    (layer && layer.columns || []).forEach((k) => { sample[k] = 1; });
+    Object.keys(props).forEach((k) => { sample[k] = props[k]; });
+    (layer && layer.features || []).slice(0, 8).forEach((ft) => {
+      Object.keys(ft.properties || {}).forEach((k) => { if (sample[k] == null) sample[k] = ft.properties[k]; });
+    });
+    let fields = findHkGridFields(sample);
+    if (!fields.eKey || !fields.nKey) {
+      const cols = (layer && layer.columns) || [];
+      const xCol = cols.find((k) => /^x$/i.test(k)) || cols.find((k) => /easting/i.test(k));
+      const yCol = cols.find((k) => /^y$/i.test(k)) || cols.find((k) => /northing/i.test(k));
+      if (xCol && yCol) fields = { eKey: xCol, nKey: yCol };
+    }
+    if (!fields.eKey || !fields.nKey) {
+      fields = { eKey: "X", nKey: "Y" };
+      if (layer) {
+        layer.columns = layer.columns || [];
+        if (layer.columns.indexOf("X") < 0) layer.columns.push("X");
+        if (layer.columns.indexOf("Y") < 0) layer.columns.push("Y");
+      }
+    }
+    const grid = wgs84ToHk1980Grid(lng, lat);
+    props[fields.eKey] = Math.round(grid[0] * 1000) / 1000;
+    props[fields.nKey] = Math.round(grid[1] * 1000) / 1000;
+    const keys = Object.keys(sample);
+    const latKey = keys.find((k) => /^(latitude|lat|wgs_?lat)$/i.test(String(k).trim()));
+    const lonKey = keys.find((k) => /^(longitude|lon|lng|long|wgs_?lon)$/i.test(String(k).trim()));
+    if (latKey) props[latKey] = Math.round(lat * 1e8) / 1e8;
+    if (lonKey) props[lonKey] = Math.round(lng * 1e8) / 1e8;
+    return props;
   }
 
   function findHkGridFields(props) {
@@ -2212,7 +2319,7 @@
         return dir * (cmp || (ia - ib));
       });
     }
-    const maxRows = Math.min(idxs.length, 500);
+    const maxRows = idxs.length;
 
     let html = "<table class='attr'><thead><tr><th class='ck-col'>✓</th><th>#</th>";
     cols.forEach((c) => {
@@ -4049,7 +4156,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=68").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=70").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||

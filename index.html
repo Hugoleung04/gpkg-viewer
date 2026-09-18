@@ -12,8 +12,8 @@
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="icon" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="vendor/leaflet.css?v=68" />
-  <link rel="stylesheet" href="styles.css?v=68" />
+  <link rel="stylesheet" href="vendor/leaflet.css?v=70" />
+  <link rel="stylesheet" href="styles.css?v=70" />
 </head>
 <body>
   <header class="topbar">
@@ -21,7 +21,7 @@
     <div class="brand">
       <div class="logo" aria-hidden="true"></div>
       <div>
-        GeoPackage Viewer <span class="ver">v1.58</span>
+        GeoPackage Viewer <span class="ver">v1.60</span>
         <small>Phone + computer — files stay on this device</small>
       </div>
     </div>
@@ -117,6 +117,7 @@
     <div class="settings-card" id="edit-panel" hidden>
       <div class="card-title">Selected spot</div>
       <div class="edit-id" id="edit-id">—</div>
+      <div class="hint" id="edit-coords"></div>
       <label class="field">Color
         <input id="spot-color" type="color" value="#3b82f6" />
       </label>
@@ -201,9 +202,9 @@
     </div>
   </div>
 
-  <script src="vendor/leaflet.js?v=68"></script>
-  <script src="vendor/geopackage.min.js?v=68"></script>
-  <script src="vendor/pdf.min.js?v=68"></script>
-  <script src="app.js?v=68"></script>
+  <script src="vendor/leaflet.js?v=70"></script>
+  <script src="vendor/geopackage.min.js?v=70"></script>
+  <script src="vendor/pdf.min.js?v=70"></script>
+  <script src="app.js?v=70"></script>
 </body>
 </html>
