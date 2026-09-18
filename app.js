@@ -1474,6 +1474,10 @@
     }
   });
   map.on("click", function (ev) {
+    if (state.treePlan && state.treePlan.pendingPdf) {
+      onTreePlanMapClick(ev.latlng);
+      return;
+    }
     if (state.addSpotMode) {
       addSpotAt(ev.latlng);
       return;
@@ -2618,6 +2622,376 @@
     return openGeoJsonFile(json);
   }
 
+  function fitAffine2d(points) {
+    const n = points.length;
+    if (n < 3) return null;
+    let Sx = 0, Sy = 0, Sxx = 0, Syy = 0, Sxy = 0, Se = 0, Sn = 0, Sxe = 0, Sye = 0, Sxn = 0, Syn = 0;
+    points.forEach((p) => {
+      Sx += p.x; Sy += p.y; Sxx += p.x * p.x; Syy += p.y * p.y; Sxy += p.x * p.y;
+      Se += p.E; Sn += p.N; Sxe += p.x * p.E; Sye += p.y * p.E; Sxn += p.x * p.N; Syn += p.y * p.N;
+    });
+    function solve(Sxz, Syz, Sz) {
+      const M = [
+        [Sxx, Sxy, Sx, Sxz],
+        [Sxy, Syy, Sy, Syz],
+        [Sx, Sy, n, Sz]
+      ];
+      for (let i = 0; i < 3; i++) {
+        let p = i;
+        for (let r = i + 1; r < 3; r++) if (Math.abs(M[r][i]) > Math.abs(M[p][i])) p = r;
+        const tmp = M[i]; M[i] = M[p]; M[p] = tmp;
+        const div = M[i][i] || 1e-12;
+        for (let k = i; k < 4; k++) M[i][k] /= div;
+        for (let r = 0; r < 3; r++) {
+          if (r === i) continue;
+          const f = M[r][i];
+          for (let k = i; k < 4; k++) M[r][k] -= f * M[i][k];
+        }
+      }
+      return [M[0][3], M[1][3], M[2][3]];
+    }
+    return { E: solve(Sxe, Sye, Se), N: solve(Sxn, Syn, Sn) };
+  }
+
+  function pageToGrid(fit, x, y) {
+    return [
+      fit.E[0] * x + fit.E[1] * y + fit.E[2],
+      fit.N[0] * x + fit.N[1] * y + fit.N[2]
+    ];
+  }
+
+  async function inflateZlibBytes(u8) {
+    if (typeof DecompressionStream === "function") {
+      try {
+        const stream = new Blob([u8]).stream().pipeThrough(new DecompressionStream("deflate"));
+        return new Uint8Array(await new Response(stream).arrayBuffer());
+      } catch (_) {}
+    }
+    throw new Error("Cannot decompress PDF attachment on this device.");
+  }
+
+  function extractArborMarkFromPdfBytes(u8) {
+    const latin = new TextDecoder("latin1").decode(u8);
+    if (latin.indexOf("tree_markers.json") < 0 && latin.indexOf("geo_controls") < 0) return null;
+    const re = /\/Type\s*\/EmbeddedFile[\s\S]{0,400}\/Length\s+(\d+)[\s\S]{0,300}stream\r?\n/g;
+    let m;
+    const hits = [];
+    while ((m = re.exec(latin))) {
+      const start = m.index + m[0].length;
+      const len = parseInt(m[1], 10);
+      if (!len || start + len > u8.length) continue;
+      hits.push({ start: start, len: len });
+    }
+    return hits;
+  }
+
+  async function readArborMarkPlan(file) {
+    const buf = await file.arrayBuffer();
+    const u8 = new Uint8Array(buf);
+    if (window.pdfjsLib) {
+      try {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
+        const pdf = await window.pdfjsLib.getDocument({ data: u8 }).promise;
+        if (typeof pdf.getAttachments === "function") {
+          const atts = await pdf.getAttachments();
+          const keys = atts ? Object.keys(atts) : [];
+          for (let i = 0; i < keys.length; i++) {
+            const rec = atts[keys[i]];
+            const name = (rec.filename || keys[i] || "").toLowerCase();
+            const content = rec.content || rec.data;
+            if (!content) continue;
+            if (name.indexOf("tree_markers") >= 0 || name.indexOf(".json") >= 0) {
+              const text = new TextDecoder("utf-8").decode(content);
+              const json = JSON.parse(text);
+              if (json && (json.markers || json.geo_controls)) return json;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("pdf.js attachments", err);
+      }
+    }
+    const hits = extractArborMarkFromPdfBytes(u8);
+    for (let i = 0; i < (hits || []).length; i++) {
+      try {
+        const slice = u8.subarray(hits[i].start, hits[i].start + hits[i].len);
+        const raw = await inflateZlibBytes(slice);
+        const json = JSON.parse(new TextDecoder("utf-8").decode(raw));
+        if (json && (json.markers || json.geo_controls)) return json;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  async function importTreePlanPdf(file) {
+    setStatus("Reading tree plan PDF…", "");
+    try {
+      const plan = await readArborMarkPlan(file);
+      if (!plan) {
+        await startManualTreePlan(file);
+        return;
+      }
+      const controls = (plan.geo_controls || []).filter((c) => isFinite(c.E) && isFinite(c.N) && isFinite(c.x) && isFinite(c.y));
+      if (controls.length < 3) {
+        setStatus("Need at least 3 E/N control points on the plan to place trees.", "warn");
+        return;
+      }
+      const fit = fitAffine2d(controls);
+      if (!fit) {
+        setStatus("Could not georeference this plan.", "error");
+        return;
+      }
+      const markers = plan.markers || [];
+      const features = [];
+      markers.forEach((mk) => {
+        if (!isFinite(mk.x) || !isFinite(mk.y)) return;
+        const grid = pageToGrid(fit, mk.x, mk.y);
+        const E = Math.round(grid[0] * 1000) / 1000;
+        const N = Math.round(grid[1] * 1000) / 1000;
+        const wgs = hk1980GridToWgs84(E, N);
+        features.push({
+          type: "Feature",
+          properties: {
+            "Tree No": mk.id || "",
+            X: E,
+            Y: N,
+            note: mk.note || "",
+            _fromTreePlan: true
+          },
+          geometry: { type: "Point", coordinates: wgs }
+        });
+      });
+      if (!features.length) {
+        setStatus("No tree spots found in this plan.", "warn");
+        return;
+      }
+      const json = new File(
+        [JSON.stringify({ type: "FeatureCollection", features: features })],
+        (file.name || "tree-plan").replace(/\.pdf$/i, "") + "-trees.geojson",
+        { type: "application/geo+json" }
+      );
+      await openGeoJsonFile(json);
+      setStatus("Imported " + features.length + " trees from the plan (HK1980 from control points).", "ok");
+    } catch (err) {
+      console.warn(err);
+      setStatus("Could not import this tree plan PDF.", "error");
+    }
+  }
+
+  function treeIdFromText(s) {
+    const t = String(s || "").trim();
+    if (/^T-?[0-9]+[A-Z]{0,2}$/i.test(t)) return t.toUpperCase();
+    return "";
+  }
+
+  async function extractPdfTreeLabels(file) {
+    if (!window.pdfjsLib) throw new Error("PDF engine missing");
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const pdf = await window.pdfjsLib.getDocument({ data: bytes }).promise;
+    const page = await pdf.getPage(1);
+    const viewport = page.getViewport({ scale: 1 });
+    const tc = await page.getTextContent();
+    const items = [];
+    (tc.items || []).forEach((it) => {
+      const id = treeIdFromText(it.str);
+      if (!id) return;
+      const tr = it.transform || [1, 0, 0, 1, 0, 0];
+      items.push({
+        id: id,
+        x: tr[4] + (it.width || 0) / 2,
+        y: tr[5] + 4
+      });
+    });
+    return { pdf: pdf, page: page, viewport: viewport, items: items, bytes: bytes };
+  }
+
+  function closeManualTreePlan() {
+    state.treePlan = null;
+    document.body.classList.remove("tree-plan-pick-map");
+    const mask = $("tree-plan-mask");
+    if (mask) mask.hidden = true;
+  }
+
+  function renderTreePlanPts() {
+    const ol = $("tree-plan-pts");
+    if (!ol || !state.treePlan) return;
+    const pts = state.treePlan.controls || [];
+    ol.innerHTML = pts.map((p, i) => {
+      const mapBit = p.lat != null ? (p.lat.toFixed(5) + ", " + p.lng.toFixed(5)) : "tap the map…";
+      return "<li>P" + (i + 1) + " on PDF → " + mapBit + "</li>";
+    }).join("") || "<li>None yet</li>";
+    const hint = $("tree-plan-hint");
+    if (hint) {
+      if (state.treePlan.pendingPdf) hint.textContent = "Now tap the same place on the map.";
+      else if (pts.length < 3) hint.textContent = "Click a landmark on the PDF, then the same place on the map. Need " + (3 - pts.length) + " more pair(s).";
+      else hint.textContent = "3 points set. Place trees, or add more pairs for a better fit.";
+    }
+  }
+
+  async function startManualTreePlan(file) {
+    setStatus("No ArborMark data. Extracting labels…", "");
+    const extracted = await extractPdfTreeLabels(file);
+    if (!extracted.items.length) {
+      setStatus("No tree IDs (T1, T2…) found in this PDF.", "warn");
+      return;
+    }
+    state.treePlan = {
+      file: file,
+      page: extracted.page,
+      viewport: extracted.viewport,
+      items: extracted.items,
+      controls: [],
+      pendingPdf: null,
+      scale: 1
+    };
+    const mask = $("tree-plan-mask");
+    const canvas = $("tree-plan-canvas");
+    if (!mask || !canvas) {
+      setStatus("Tree plan window missing.", "error");
+      return;
+    }
+    const fitW = Math.min(520, (window.innerWidth || 600) - 48);
+    const scale = Math.max(0.6, Math.min(1.6, fitW / extracted.viewport.width));
+    state.treePlan.scale = scale;
+    const vp = extracted.page.getViewport({ scale: scale });
+    canvas.width = Math.round(vp.width);
+    canvas.height = Math.round(vp.height);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await extracted.page.render({ canvasContext: ctx, viewport: vp }).promise;
+    try { state.treePlan.snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height); } catch (_) {}
+    ctx.fillStyle = "rgba(220,38,38,0.9)";
+    extracted.items.forEach((it) => {
+      const x = it.x * scale;
+      const y = (extracted.viewport.height - it.y) * scale;
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    if ($("tree-plan-found")) {
+      $("tree-plan-found").textContent = "Found " + extracted.items.length + " labels: " +
+        extracted.items.slice(0, 12).map((it) => it.id).join(", ") + (extracted.items.length > 12 ? "…" : "");
+    }
+    mask.hidden = false;
+    renderTreePlanPts();
+    setStatus("Match 3 landmarks: PDF first, then the map.", "ok");
+  }
+
+  function treePlanCanvasToPdf(ev) {
+    const canvas = $("tree-plan-canvas");
+    const plan = state.treePlan;
+    if (!canvas || !plan) return null;
+    const r = canvas.getBoundingClientRect();
+    const px = (ev.clientX - r.left) * (canvas.width / r.width);
+    const py = (ev.clientY - r.top) * (canvas.height / r.height);
+    const scale = plan.scale || 1;
+    return { x: px / scale, y: plan.viewport.height - py / scale };
+  }
+
+  function refreshTreePlanCanvas() {
+    const canvas = $("tree-plan-canvas");
+    const plan = state.treePlan;
+    if (!canvas || !plan) return;
+    const ctx = canvas.getContext("2d");
+    if (plan.snapshot) ctx.putImageData(plan.snapshot, 0, 0);
+    const scale = plan.scale || 1;
+    ctx.fillStyle = "rgba(220,38,38,0.9)";
+    (plan.items || []).forEach((it) => {
+      const x = it.x * scale;
+      const y = (plan.viewport.height - it.y) * scale;
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    drawTreePlanControls();
+  }
+
+  function drawTreePlanControls() {
+    const canvas = $("tree-plan-canvas");
+    const plan = state.treePlan;
+    if (!canvas || !plan) return;
+    const ctx = canvas.getContext("2d");
+    const scale = plan.scale || 1;
+    (plan.controls || []).forEach((p, i) => {
+      const x = p.x * scale;
+      const y = (plan.viewport.height - p.y) * scale;
+      ctx.fillStyle = "#2563eb";
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.font = "11px sans-serif";
+      ctx.fillText(String(i + 1), x + 6, y - 4);
+    });
+    if (plan.pendingPdf) {
+      const x = plan.pendingPdf.x * scale;
+      const y = (plan.viewport.height - plan.pendingPdf.y) * scale;
+      ctx.strokeStyle = "#f59e0b";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, y, 7, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  function onTreePlanPdfClick(ev) {
+    if (!state.treePlan) return;
+    const pt = treePlanCanvasToPdf(ev);
+    if (!pt) return;
+    state.treePlan.pendingPdf = pt;
+    document.body.classList.add("tree-plan-pick-map");
+    renderTreePlanPts();
+    drawTreePlanControls();
+    setStatus("Now tap the same place on the map.", "ok");
+  }
+
+  function onTreePlanMapClick(latlng) {
+    if (!state.treePlan || !state.treePlan.pendingPdf) return false;
+    state.treePlan.controls.push({
+      x: state.treePlan.pendingPdf.x,
+      y: state.treePlan.pendingPdf.y,
+      lat: latlng.lat,
+      lng: latlng.lng
+    });
+    state.treePlan.pendingPdf = null;
+    document.body.classList.remove("tree-plan-pick-map");
+    renderTreePlanPts();
+    refreshTreePlanCanvas();
+    setStatus("Control " + state.treePlan.controls.length + " saved.", "ok");
+    return true;
+  }
+
+  async function placeManualTreePlan() {
+    const plan = state.treePlan;
+    if (!plan || (plan.controls || []).length < 3) {
+      setStatus("Set at least 3 PDF ↔ map pairs.", "warn");
+      return;
+    }
+    const fitPts = plan.controls.map((c) => ({ x: c.x, y: c.y, E: c.lng, N: c.lat }));
+    const fit = fitAffine2d(fitPts);
+    if (!fit) {
+      setStatus("Could not fit those control points.", "error");
+      return;
+    }
+    const features = plan.items.map((it) => {
+      const lng = fit.E[0] * it.x + fit.E[1] * it.y + fit.E[2];
+      const lat = fit.N[0] * it.x + fit.N[1] * it.y + fit.N[2];
+      const props = { "Tree No": it.id, _fromTreePlan: true };
+      writeCoordsToProps(props, null, lat, lng);
+      return { type: "Feature", properties: props, geometry: { type: "Point", coordinates: [lng, lat] } };
+    });
+    const json = new File(
+      [JSON.stringify({ type: "FeatureCollection", features: features })],
+      (plan.file.name || "tree-plan").replace(/\.pdf$/i, "") + "-trees.geojson",
+      { type: "application/geo+json" }
+    );
+    closeManualTreePlan();
+    await openGeoJsonFile(json);
+    setStatus("Imported " + features.length + " trees from the PDF labels.", "ok");
+  }
+
   function invalidateMapSoon() {
     setTimeout(() => {
       try { map.invalidateSize({ animate: false }); } catch (_) {}
@@ -2889,6 +3263,25 @@
       e.target.value = "";
     });
   }
+  if ($("btn-import-tree-plan") && $("tree-plan-input")) {
+    $("btn-import-tree-plan").addEventListener("click", () => $("tree-plan-input").click());
+    $("tree-plan-input").addEventListener("change", (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (f) importTreePlanPdf(f);
+      e.target.value = "";
+    });
+  }
+  if ($("tree-plan-canvas")) $("tree-plan-canvas").addEventListener("click", onTreePlanPdfClick);
+  if ($("btn-tree-plan-cancel")) $("btn-tree-plan-cancel").addEventListener("click", closeManualTreePlan);
+  if ($("btn-tree-plan-go")) $("btn-tree-plan-go").addEventListener("click", placeManualTreePlan);
+  if ($("btn-tree-plan-undo")) $("btn-tree-plan-undo").addEventListener("click", () => {
+    if (!state.treePlan) return;
+    if (state.treePlan.pendingPdf) state.treePlan.pendingPdf = null;
+    else state.treePlan.controls.pop();
+    document.body.classList.remove("tree-plan-pick-map");
+    renderTreePlanPts();
+    refreshTreePlanCanvas();
+  });
   if ($("btn-toggle-pdf")) {
     $("btn-toggle-pdf").addEventListener("click", () => {
       if (!state.pdf) {
@@ -4156,7 +4549,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=70").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=72").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||

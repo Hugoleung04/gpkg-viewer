@@ -941,3 +941,24 @@ body.table-collapsed .status { bottom: 12px; }
     grid-template-rows: auto 1fr var(--table-h, 36vh);
   }
 }
+
+.tree-plan-card { width: min(560px, 100%); }
+.tree-plan-preview-wrap {
+  margin: 8px 0;
+  max-height: 42vh;
+  overflow: auto;
+  background: #e5e7eb;
+  border-radius: 8px;
+  line-height: 0;
+}
+#tree-plan-mask {
+  align-items: flex-end;
+  justify-content: flex-start;
+  background: transparent;
+  pointer-events: none;
+  padding: 10px 12px 72px;
+}
+#tree-plan-mask .tree-plan-card { pointer-events: auto; width: min(380px, calc(100vw - 24px)); max-height: min(70vh, 640px); }
+#tree-plan-canvas { width: 100%; height: auto; cursor: crosshair; }
+.tree-plan-pts { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
+body.tree-plan-pick-map { cursor: crosshair; }
