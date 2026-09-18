@@ -12,8 +12,8 @@
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="icon" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="vendor/leaflet.css?v=72" />
-  <link rel="stylesheet" href="styles.css?v=72" />
+  <link rel="stylesheet" href="vendor/leaflet.css?v=73" />
+  <link rel="stylesheet" href="styles.css?v=73" />
 </head>
 <body>
   <header class="topbar">
@@ -21,7 +21,7 @@
     <div class="brand">
       <div class="logo" aria-hidden="true"></div>
       <div>
-        GeoPackage Viewer <span class="ver">v1.62</span>
+        GeoPackage Viewer <span class="ver">v1.63</span>
         <small>Phone + computer — files stay on this device</small>
       </div>
     </div>
@@ -75,7 +75,7 @@
       <input id="pdf-input" type="file" accept="application/pdf,.pdf,*/*" hidden />
       <button class="btn full" id="btn-import-tree-plan" type="button">Import tree plan PDF</button>
       <input id="tree-plan-input" type="file" accept="application/pdf,.pdf" hidden />
-      <div class="hint">ArborMark plans import automatically. Other PDFs: match 3 points on the plan to the map.</div>
+      <div class="hint">ArborMark: spots appear at once. Other PDFs: a preview opens on the right. Tap a landmark on the preview, then the same place on the map, three times.</div>
       <button class="btn full" id="btn-export-pdf-file" type="button">Export PDF</button>
       <button class="btn full" id="btn-import-osm" type="button">Import OSM basemap</button>
       <input id="osm-input" type="file" accept="*/*" hidden />
@@ -155,6 +155,7 @@
   </aside>
 
   <div id="map"></div>
+  <div id="tree-plan-banner">Tap the same landmark on the map</div>
   <aside class="pdf-panel" id="pdf-panel" hidden>
     <div class="pdf-resizer" id="pdf-resizer" title="Drag to resize PDF"></div>
     <div class="pdf-bar">
@@ -207,8 +208,8 @@
 
   <div class="col-export-mask" id="tree-plan-mask" hidden>
     <div class="col-export-card tree-plan-card" role="dialog">
-      <strong>Place tree plan on the map</strong>
-      <p class="hint" id="tree-plan-hint">No ArborMark data. Click a clear landmark on the PDF, then the same place on the map. Do this 3 times.</p>
+      <strong>Step 1 — tap a landmark on this PDF</strong>
+      <p class="hint" id="tree-plan-hint">Tap a sharp corner or road junction on the preview. Then tap the same place on the map. Repeat 3 times.</p>
       <div class="tree-plan-preview-wrap">
         <canvas id="tree-plan-canvas"></canvas>
       </div>
@@ -223,9 +224,9 @@
     </div>
   </div>
 
-  <script src="vendor/leaflet.js?v=72"></script>
-  <script src="vendor/geopackage.min.js?v=72"></script>
-  <script src="vendor/pdf.min.js?v=72"></script>
-  <script src="app.js?v=72"></script>
+  <script src="vendor/leaflet.js?v=73"></script>
+  <script src="vendor/geopackage.min.js?v=73"></script>
+  <script src="vendor/pdf.min.js?v=73"></script>
+  <script src="app.js?v=73"></script>
 </body>
 </html>

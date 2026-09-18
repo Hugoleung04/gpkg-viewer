@@ -2808,9 +2808,11 @@
 
   function closeManualTreePlan() {
     state.treePlan = null;
-    document.body.classList.remove("tree-plan-pick-map");
+    document.body.classList.remove("tree-plan-pick-map", "tree-plan-open");
     const mask = $("tree-plan-mask");
     if (mask) mask.hidden = true;
+    const ban = $("tree-plan-banner");
+    if (ban) ban.textContent = "Tap the same landmark on the map";
   }
 
   function renderTreePlanPts() {
@@ -2823,18 +2825,29 @@
     }).join("") || "<li>None yet</li>";
     const hint = $("tree-plan-hint");
     if (hint) {
-      if (state.treePlan.pendingPdf) hint.textContent = "Now tap the same place on the map.";
-      else if (pts.length < 3) hint.textContent = "Click a landmark on the PDF, then the same place on the map. Need " + (3 - pts.length) + " more pair(s).";
-      else hint.textContent = "3 points set. Place trees, or add more pairs for a better fit.";
+      if (state.treePlan.pendingPdf) hint.textContent = "Step 2 — tap the same place on the map (blue banner).";
+      else if (pts.length < 3) hint.textContent = "Step 1 — tap a landmark on this PDF preview. Then tap the map. Need " + (3 - pts.length) + " more pair(s).";
+      else hint.textContent = "3 points set. Tap Place trees, or add more pairs.";
+    }
+    const ban = $("tree-plan-banner");
+    if (ban) {
+      if (state.treePlan.pendingPdf) {
+        ban.textContent = "Step 2 of 3 — tap the same landmark on the map";
+        document.body.classList.add("tree-plan-open");
+      } else {
+        ban.textContent = pts.length >= 3 ? "Ready — tap Place trees" : "Step 1 — tap a landmark on the PDF preview";
+        document.body.classList.toggle("tree-plan-open", true);
+      }
     }
   }
 
   async function startManualTreePlan(file) {
-    setStatus("No ArborMark data. Extracting labels…", "");
+    if (typeof setMenuOpen === "function") setMenuOpen(false);
+    document.body.classList.add("tree-plan-open");
+    setStatus("No ArborMark data. Opening PDF preview…", "");
     const extracted = await extractPdfTreeLabels(file);
     if (!extracted.items.length) {
-      setStatus("No tree IDs (T1, T2…) found in this PDF.", "warn");
-      return;
+      setStatus("Preview opened. No T1/T2 labels found — you can still match landmarks, but Place trees needs labels.", "warn");
     }
     state.treePlan = {
       file: file,
@@ -4549,7 +4562,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=72").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=73").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||

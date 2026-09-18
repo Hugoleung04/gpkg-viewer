@@ -942,23 +942,72 @@ body.table-collapsed .status { bottom: 12px; }
   }
 }
 
+
 .tree-plan-card { width: min(560px, 100%); }
 .tree-plan-preview-wrap {
   margin: 8px 0;
-  max-height: 42vh;
+  max-height: 48vh;
   overflow: auto;
   background: #e5e7eb;
   border-radius: 8px;
   line-height: 0;
+  border: 1px solid var(--line);
 }
 #tree-plan-mask {
-  align-items: flex-end;
-  justify-content: flex-start;
+  position: fixed;
+  inset: auto 10px 10px auto;
+  left: auto;
+  top: 58px;
+  width: min(420px, calc(100vw - 20px));
+  height: auto;
+  max-height: calc(100vh - 70px);
+  z-index: 1200;
   background: transparent;
   pointer-events: none;
-  padding: 10px 12px 72px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 0;
 }
-#tree-plan-mask .tree-plan-card { pointer-events: auto; width: min(380px, calc(100vw - 24px)); max-height: min(70vh, 640px); }
-#tree-plan-canvas { width: 100%; height: auto; cursor: crosshair; }
+#tree-plan-mask[hidden] { display: none !important; }
+#tree-plan-mask .tree-plan-card {
+  pointer-events: auto;
+  width: 100%;
+  max-height: calc(100vh - 70px);
+  overflow: auto;
+  box-shadow: 0 12px 40px rgba(0,0,0,.45);
+  border: 2px solid #60a5fa;
+}
+#tree-plan-canvas { width: 100%; height: auto; cursor: crosshair; touch-action: manipulation; }
 .tree-plan-pts { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
 body.tree-plan-pick-map { cursor: crosshair; }
+body.tree-plan-open #tree-plan-banner { display: block; }
+#tree-plan-banner {
+  display: none;
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 650;
+  background: #1d4ed8;
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 650;
+  pointer-events: none;
+  box-shadow: 0 6px 20px rgba(0,0,0,.3);
+  white-space: nowrap;
+}
+@media (max-width: 720px) {
+  #tree-plan-mask {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-height: 52vh;
+  }
+  #tree-plan-mask .tree-plan-card { max-height: 52vh; border-radius: 12px 12px 0 0; }
+  .tree-plan-preview-wrap { max-height: 28vh; }
+}
