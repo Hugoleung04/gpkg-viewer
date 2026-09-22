@@ -1,4 +1,4 @@
-const CACHE = "gpkg-viewer-v73";
+const CACHE = "gpkg-viewer-v79";
 const ASSETS = [
   "./index.html",
   "./styles.css",

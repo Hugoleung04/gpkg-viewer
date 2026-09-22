@@ -12,8 +12,8 @@
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="icon" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="vendor/leaflet.css?v=73" />
-  <link rel="stylesheet" href="styles.css?v=73" />
+  <link rel="stylesheet" href="vendor/leaflet.css?v=79" />
+  <link rel="stylesheet" href="styles.css?v=79" />
 </head>
 <body>
   <header class="topbar">
@@ -21,7 +21,7 @@
     <div class="brand">
       <div class="logo" aria-hidden="true"></div>
       <div>
-        GeoPackage Viewer <span class="ver">v1.63</span>
+        GeoPackage Viewer <span class="ver">v1.69</span>
         <small>Phone + computer — files stay on this device</small>
       </div>
     </div>
@@ -77,6 +77,10 @@
       <input id="tree-plan-input" type="file" accept="application/pdf,.pdf" hidden />
       <div class="hint">ArborMark: spots appear at once. Other PDFs: a preview opens on the right. Tap a landmark on the preview, then the same place on the map, three times.</div>
       <button class="btn full" id="btn-export-pdf-file" type="button">Export PDF</button>
+      <button class="btn full" id="btn-select-export-area" type="button">Select export area</button>
+      <button class="btn full" id="btn-export-arbormark" type="button">Export for ArborMark</button>
+      <button class="btn full" id="btn-export-plan-view" type="button">Export plan to view / print</button>
+      <div class="hint">Two PDFs: ArborMark = map + editable data only (no printed dots). View/print = map with spots visible in Preview.</div>
       <button class="btn full" id="btn-import-osm" type="button">Import OSM basemap</button>
       <input id="osm-input" type="file" accept="*/*" hidden />
       <div class="hint">Export a small area from openstreetmap.org → Export → import that .osm. You can rename or delete only maps you imported. Then Open your tree GPKG.</div>
@@ -224,9 +228,9 @@
     </div>
   </div>
 
-  <script src="vendor/leaflet.js?v=73"></script>
-  <script src="vendor/geopackage.min.js?v=73"></script>
-  <script src="vendor/pdf.min.js?v=73"></script>
-  <script src="app.js?v=73"></script>
+  <script src="vendor/leaflet.js?v=79"></script>
+  <script src="vendor/geopackage.min.js?v=79"></script>
+  <script src="vendor/pdf.min.js?v=79"></script>
+  <script src="app.js?v=79"></script>
 </body>
 </html>

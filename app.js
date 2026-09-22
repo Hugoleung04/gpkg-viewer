@@ -38,6 +38,9 @@
       catch (_) { return []; }
     })(),
     addSpotMode: false,
+    exportAreaMode: false,
+    exportArea: null,
+    exportRectLayer: null,
     addSpotField: "",
     pdf: null,
     markerZoomRef: null
@@ -1478,6 +1481,7 @@
       onTreePlanMapClick(ev.latlng);
       return;
     }
+    if (state.exportAreaMode) return;
     if (state.addSpotMode) {
       addSpotAt(ev.latlng);
       return;
@@ -3445,7 +3449,526 @@
   }
   if ($("btn-hide-pdf")) $("btn-hide-pdf").addEventListener("click", () => setPdfVisible(false));
   if ($("btn-close-pdf")) $("btn-close-pdf").addEventListener("click", () => closePdf(true));
+  function pdfLiteral(s) {
+    return "(" + String(s == null ? "" : s).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)") + ")";
+  }
+
+  function pdfCirclePath(x, y, r) {
+    const k = 0.5522847498 * r;
+    return x.toFixed(2) + " " + (y + r).toFixed(2) + " m " +
+      (x + k).toFixed(2) + " " + (y + r).toFixed(2) + " " + (x + r).toFixed(2) + " " + (y + k).toFixed(2) + " " + (x + r).toFixed(2) + " " + y.toFixed(2) + " c " +
+      (x + r).toFixed(2) + " " + (y - k).toFixed(2) + " " + (x + k).toFixed(2) + " " + (y - r).toFixed(2) + " " + x.toFixed(2) + " " + (y - r).toFixed(2) + " c " +
+      (x - k).toFixed(2) + " " + (y - r).toFixed(2) + " " + (x - r).toFixed(2) + " " + (y - k).toFixed(2) + " " + (x - r).toFixed(2) + " " + y.toFixed(2) + " c " +
+      (x - r).toFixed(2) + " " + (y + k).toFixed(2) + " " + (x - k).toFixed(2) + " " + (y + r).toFixed(2) + " " + x.toFixed(2) + " " + (y + r).toFixed(2) + " c ";
+  }
+
+  async function compressZlib(u8) {
+    if (typeof CompressionStream === "function") {
+      try {
+        const stream = new Blob([u8]).stream().pipeThrough(new CompressionStream("deflate"));
+        return new Uint8Array(await new Response(stream).arrayBuffer());
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  function assemblePdf(objects) {
+    const enc = new TextEncoder();
+    const parts = [enc.encode("%PDF-1.7\n%\xE2\xE3\xCF\xD3\n")];
+    const offs = [0];
+    let pos = parts[0].length;
+    objects.forEach((body, i) => {
+      const chunk = typeof body === "string" ? enc.encode(body) : body;
+      const head = enc.encode((i + 1) + " 0 obj\n");
+      const tail = enc.encode("\nendobj\n");
+      offs.push(pos);
+      parts.push(head, chunk, tail);
+      pos += head.length + chunk.length + tail.length;
+    });
+    const xrefPos = pos;
+    let xref = "xref\n0 " + (objects.length + 1) + "\n0000000000 65535 f \n";
+    for (let i = 1; i <= objects.length; i++) {
+      xref += String(offs[i]).padStart(10, "0") + " 00000 n \n";
+    }
+    const xrefBytes = enc.encode(xref);
+    parts.push(xrefBytes);
+    pos += xrefBytes.length;
+    const trailer = enc.encode(
+      "trailer\n<< /Size " + (objects.length + 1) + " /Root 1 0 R >>\nstartxref\n" + xrefPos + "\n%%EOF\n"
+    );
+    parts.push(trailer);
+    let n = 0;
+    parts.forEach((p) => { n += p.length; });
+    const out = new Uint8Array(n);
+    let o = 0;
+    parts.forEach((p) => { out.set(p, o); o += p.length; });
+    return out;
+  }
+
+  function catalogSpotsForArborMark(layer) {
+    const spots = [];
+    (layer.features || []).forEach((ft, i) => {
+      const p = ft.properties || {};
+      let lat = null, lng = null;
+      const marker = findMarkerForFeature(layer, ft);
+      if (marker && typeof marker.getLatLng === "function") {
+        const ll = marker.getLatLng();
+        lat = ll.lat; lng = ll.lng;
+      } else if (ft.geometry && ft.geometry.coordinates && ft.geometry.type === "Point") {
+        lng = ft.geometry.coordinates[0];
+        lat = ft.geometry.coordinates[1];
+      }
+      if (!isFinite(lat) || !isFinite(lng)) return;
+      let E, N;
+      const gf = findHkGridFields(p);
+      const e0 = gf.eKey ? parseFloat(p[gf.eKey]) : NaN;
+      const n0 = gf.nKey ? parseFloat(p[gf.nKey]) : NaN;
+      if (looksLikeHkGrid(e0, n0)) { E = e0; N = n0; }
+      else {
+        const g = wgs84ToHk1980Grid(lng, lat);
+        E = g[0]; N = g[1];
+      }
+      const id = labelText(ft, state.labelField) || p["Tree No"] || p["Tree ID"] || p.TreeNo || ("T" + String(i + 1).padStart(3, "0"));
+      spots.push({ id: String(id), E: E, N: N, lat: lat, lng: lng, note: p.note || p.remarks || p.Remarks || "" });
+    });
+    return spots;
+  }
+
+  function latLngToEn(lat, lng) {
+    if (typeof wgs84ToHk1980Grid === "function") return wgs84ToHk1980Grid(lng, lat);
+    return [lng, lat];
+  }
+
+  function projectEnToCanvas(E, N, minE, maxE, minN, maxN, w, h) {
+    return [
+      ((E - minE) / (maxE - minE || 1)) * w,
+      (1 - (N - minN) / (maxN - minN || 1)) * h
+    ];
+  }
+
+  function forEachBasemapFeature(fn) {
+    if (!state.basemap || typeof state.basemap.eachLayer !== "function") return;
+    function walk(ly) {
+      if (ly && ly.feature && ly.feature.geometry) fn(ly.feature, ly);
+      if (ly && typeof ly.eachLayer === "function") ly.eachLayer(walk);
+    }
+    walk(state.basemap);
+  }
+
+  function drawGeomOnCanvas(ctx, geom, minE, maxE, minN, maxN, w, h, fill, stroke, lineW) {
+    function ring(coords, close) {
+      if (!coords || coords.length < 2) return;
+      ctx.beginPath();
+      coords.forEach((c, i) => {
+        const en = latLngToEn(c[1], c[0]);
+        const p = projectEnToCanvas(en[0], en[1], minE, maxE, minN, maxN, w, h);
+        if (i === 0) ctx.moveTo(p[0], p[1]);
+        else ctx.lineTo(p[0], p[1]);
+      });
+      if (close) ctx.closePath();
+      if (fill) ctx.fill();
+      if (stroke) ctx.stroke();
+    }
+    const t = geom && geom.type;
+    const c = geom && geom.coordinates;
+    if (!t || !c) return;
+    ctx.lineWidth = lineW || 1;
+    if (t === "LineString") ring(c, false);
+    else if (t === "MultiLineString") c.forEach((r) => ring(r, false));
+    else if (t === "Polygon") c.forEach((r, i) => ring(r, true));
+    else if (t === "MultiPolygon") c.forEach((poly) => poly.forEach((r) => ring(r, true)));
+  }
+
+  function drawVectorBasemap(ctx, minE, maxE, minN, maxN, w, h) {
+    ctx.fillStyle = "#d5e8f0";
+    ctx.fillRect(0, 0, w, h);
+    const layers = [];
+    forEachBasemapFeature((feat, ly) => layers.push({ feat: feat, ly: ly }));
+    function styleOf(ly, feat) {
+      if (ly && typeof ly.options === "function") return {};
+      const st = (ly && ly.options && ly.options.style);
+      if (typeof st === "function") return st(feat) || {};
+      if (st && typeof st === "object") return st;
+      return ly && ly.options ? ly.options : {};
+    }
+    layers.forEach((item) => {
+      const g = item.feat.geometry;
+      if (!g || g.type === "Point" || g.type === "MultiPoint") return;
+      const st = styleOf(item.ly, item.feat);
+      const fill = st.fillColor || (st.fillOpacity === 0 ? null : st.fillColor);
+      const stroke = st.color;
+      if (g.type === "Polygon" || g.type === "MultiPolygon") {
+        ctx.fillStyle = st.fillColor || "#e8e4d8";
+        ctx.strokeStyle = st.color || "#ccc";
+        ctx.globalAlpha = st.fillOpacity != null ? st.fillOpacity : 0.85;
+        drawGeomOnCanvas(ctx, g, minE, maxE, minN, maxN, w, h, true, !!st.weight, st.weight || 0.4);
+        ctx.globalAlpha = 1;
+      }
+    });
+    layers.forEach((item) => {
+      const g = item.feat.geometry;
+      if (!g || (g.type !== "LineString" && g.type !== "MultiLineString")) return;
+      const st = styleOf(item.ly, item.feat);
+      ctx.strokeStyle = st.color || "#888";
+      ctx.globalAlpha = st.opacity != null ? st.opacity : 1;
+      drawGeomOnCanvas(ctx, g, minE, maxE, minN, maxN, w, h, false, true, st.weight || 1.2);
+      ctx.globalAlpha = 1;
+    });
+  }
+
+  function exportTileUrls(x, y, z, tileLayer) {
+    const list = [];
+    const mode = ($("basemap") && $("basemap").value) || "";
+    if (mode.indexOf("hk") === 0) {
+      list.push("https://mapapi.geodata.gov.hk/gs/api/v1.0.0/xyz/basemap/WGS84/" + z + "/" + x + "/" + y + ".png");
+      list.push("https://mapapi.geodata.gov.hk/gs/api/v1.0.0/xyz/label/hk/en/WGS84/" + z + "/" + x + "/" + y + ".png");
+    }
+    try { if (tileLayer && tileLayer.getTileUrl) list.unshift(tileLayer.getTileUrl({ x: x, y: y, z: z })); } catch (_) {}
+    const s = ["a", "b", "c"][(x + y) % 3];
+    list.push("https://" + s + ".basemaps.cartocdn.com/rastertiles/voyager/" + z + "/" + x + "/" + y + ".png");
+    list.push("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/" + z + "/" + y + "/" + x);
+    return list.filter(Boolean);
+  }
+
+  function loadCorsImage(urls) {
+    return new Promise((resolve) => {
+      let i = 0;
+      function next() {
+        if (i >= urls.length) { resolve(null); return; }
+        const url = urls[i++];
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = function () { resolve(img); };
+        img.onerror = next;
+        img.src = url;
+      }
+      next();
+    });
+  }
+
+  async function tryCaptureTiles(bounds, w, h) {
+    try {
+      let tileLayer = null;
+      map.eachLayer((ly) => {
+        if (!tileLayer && ly.getTileUrl && ly._url) tileLayer = ly;
+        if (!tileLayer && ly.eachLayer) {
+          ly.eachLayer((c) => { if (!tileLayer && c.getTileUrl && c._url) tileLayer = c; });
+        }
+      });
+      const zoom = Math.max(14, Math.min(18, map.getBoundsZoom(bounds, false, [w, h]) || 16));
+      const nw = map.project(bounds.getNorthWest(), zoom);
+      const se = map.project(bounds.getSouthEast(), zoom);
+      const ts = 256;
+      const minX = Math.floor(nw.x / ts);
+      const maxX = Math.floor(se.x / ts);
+      const minY = Math.floor(nw.y / ts);
+      const maxY = Math.floor(se.y / ts);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(2, Math.round(w));
+      canvas.height = Math.max(2, Math.round(h));
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#aad3df";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const jobs = [];
+      for (let x = minX; x <= maxX; x++) {
+        for (let y = minY; y <= maxY; y++) jobs.push({ x: x, y: y, z: zoom });
+      }
+      if (jobs.length > 180) jobs.splice(180);
+      let ok = 0;
+      await Promise.all(jobs.map(async (t) => {
+        const img = await loadCorsImage(exportTileUrls(t.x, t.y, t.z, tileLayer));
+        if (!img) return;
+        const sx = (t.x * ts - nw.x) / (se.x - nw.x) * canvas.width;
+        const sy = (t.y * ts - nw.y) / (se.y - nw.y) * canvas.height;
+        const dw = ts / (se.x - nw.x) * canvas.width;
+        const dh = ts / (se.y - nw.y) * canvas.height;
+        try { ctx.drawImage(img, sx, sy, dw, dh); ok++; } catch (_) {}
+      }));
+      if (ok < 2) return null;
+      return canvas;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function renderPlanBasemap(bounds, minE, maxE, minN, maxN, w, h) {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(4, Math.round(w));
+    canvas.height = Math.max(4, Math.round(h));
+    const ctx = canvas.getContext("2d");
+    let tiles = await tryCaptureTiles(bounds, canvas.width, canvas.height);
+    if (tiles) {
+      try { ctx.drawImage(tiles, 0, 0, canvas.width, canvas.height); } catch (_) { tiles = null; }
+    }
+    if (!tiles) drawVectorBasemap(ctx, minE, maxE, minN, maxN, canvas.width, canvas.height);
+    return canvasToJpegBytes(canvas);
+  }
+
+  async function exportArborMarkPdf(opts) {
+    opts = opts || {};
+    const found = currentCatalogLayer();
+    if (!found || !found.layer || !found.layer.features || !found.layer.features.length) {
+      setStatus("Open a catalog first, then export a plan PDF.", "warn");
+      return;
+    }
+    let spots = catalogSpotsForArborMark(found.layer);
+    if (spots.length < 1) {
+      setStatus("No mapped spots to export.", "warn");
+      return;
+    }
+    const viewB = (state.exportArea && state.exportArea.isValid && state.exportArea.isValid())
+      ? state.exportArea
+      : map.getBounds();
+    spots = spots.filter((s) => viewB.contains(L.latLng(s.lat, s.lng)));
+    if (!spots.length) {
+      setStatus("No trees inside the selected export area. Drag a box that covers the trees.", "warn");
+      return;
+    }
+    const swLL = viewB.getSouthWest();
+    const neLL = viewB.getNorthEast();
+    const swG = wgs84ToHk1980Grid(swLL.lng, swLL.lat);
+    const neG = wgs84ToHk1980Grid(neLL.lng, neLL.lat);
+    const minE = Math.min(swG[0], neG[0]);
+    const maxE = Math.max(swG[0], neG[0]);
+    const minN = Math.min(swG[1], neG[1]);
+    const maxN = Math.max(swG[1], neG[1]);
+    const W = 841.92, H = 595.32;
+    const mx0 = 48, my0 = 36, titleH = 28;
+    const availW = W - mx0 * 2;
+    const availH = H - my0 * 2 - titleH;
+    const zoomRef = Math.max(14, Math.min(18, map.getBoundsZoom(viewB, false) || 16));
+    const nwP = map.project(viewB.getNorthWest(), zoomRef);
+    const seP = map.project(viewB.getSouthEast(), zoomRef);
+    const projW = Math.max(1, seP.x - nwP.x);
+    const projH = Math.max(1, seP.y - nwP.y);
+    const fit = Math.min(availW / projW, availH / projH);
+    const plotW = projW * fit;
+    const plotH = projH * fit;
+    const mx = mx0 + (availW - plotW) / 2;
+    const my = my0 + (availH - plotH) / 2;
+    function llToPage(lat, lng) {
+      const p = map.project(L.latLng(lat, lng), zoomRef);
+      const x = mx + ((p.x - nwP.x) / projW) * plotW;
+      const yPdf = my + plotH - ((p.y - nwP.y) / projH) * plotH;
+      return { xPdf: x, yPdf: yPdf, x: x / W, y: 1 - yPdf / H };
+    }
+    function enToPage(E, N) {
+      const wgs = hk1980GridToWgs84(E, N);
+      return llToPage(wgs[1], wgs[0]);
+    }
+    const controls = [
+      { name: "1", E: minE, N: maxN },
+      { name: "2", E: maxE, N: maxN },
+      { name: "3", E: maxE, N: minN },
+      { name: "4", E: minE, N: minN }
+    ].map((c) => {
+      const p = enToPage(c.E, c.N);
+      return { name: c.name, x: p.x, y: p.y, E: Math.round(c.E * 1000) / 1000, N: Math.round(c.N * 1000) / 1000 };
+    });
+    const markers = spots.map((s, i) => {
+      const p = enToPage(s.E, s.N);
+      return {
+        uid: "m" + (i + 1),
+        id: s.id,
+        x: p.x,
+        y: p.y,
+        color: [220, 50, 50],
+        size: 6,
+        note: s.note || "",
+        label_pos: "右",
+        label_follow: false,
+        font_size: 11,
+        label_boxed: false,
+        spot_fill: "solid",
+        show_leader: true,
+        label_dragged: false,
+        label_x: Math.min(0.98, p.x + 0.012),
+        label_y: p.y,
+        _xPdf: p.xPdf,
+        _yPdf: p.yPdf
+      };
+    });
+    const nums = markers.map((m) => parseInt(String(m.id).replace(/\D/g, ""), 10)).filter((n) => isFinite(n));
+    const nextNum = (nums.length ? Math.max.apply(null, nums) : markers.length) + 1;
+    const payload = {
+      version: 6,
+      page: 0,
+      next_num: nextNum,
+      next_tid: "T" + String(nextNum).padStart(3, "0"),
+      label_boxed: false,
+      show_leader: true,
+      markers: markers.map((m) => {
+        const o = {};
+        Object.keys(m).forEach((k) => { if (k.charAt(0) !== "_") o[k] = m[k]; });
+        return o;
+      }),
+      exported_at: new Date().toISOString(),
+      annot_export: false,
+      overlay_xrefs: { "0": 11 },
+      geo_controls: controls,
+      north_deg: ""
+    };
+    const jsonText = JSON.stringify(payload);
+    const jsonBytes = new TextEncoder().encode(jsonText);
+    const jsonZ = await compressZlib(jsonBytes);
+    const locName = (found.file && found.file.name ? found.file.name.replace(/\.(gpkg|geojson|json|pdf)$/i, "") : "") || found.layer.tableName || "";
+
+    setStatus("Drawing basemap into the plan…", "");
+    const imgW = Math.max(400, Math.round(plotW * 2.4));
+    const imgH = Math.max(280, Math.round(plotH * 2.4));
+    const jpg = await renderPlanBasemap(viewB, minE, maxE, minN, maxN, imgW, imgH);
+
+    let content = "q\n1 1 1 rg 0 0 " + W + " " + H + " re f\nQ\n";
+    if (jpg && jpg.length) {
+      content += "q " + plotW.toFixed(2) + " 0 0 " + plotH.toFixed(2) + " " + mx.toFixed(2) + " " + my.toFixed(2) + " cm /Im0 Do Q\n";
+    } else {
+      content += "q 0.92 0.94 0.97 rg " + mx + " " + my + " " + plotW + " " + plotH + " re f Q\n";
+    }
+    content += "BT /F1 11 Tf 50 " + (H - 26) + " Td " + pdfLiteral(locName || "Tree location plan") + " Tj ET\n";
+    if (opts.printMarkers) {
+      markers.forEach((m) => {
+        content += "1 0 0 RG 1 0.15 0.15 rg 1.1 w " + pdfCirclePath(m._xPdf, m._yPdf, 3.1) + "B\n";
+        content += "0.7 w " + m._xPdf.toFixed(2) + " " + m._yPdf.toFixed(2) + " m " +
+          (m._xPdf + 10).toFixed(2) + " " + (m._yPdf + 8).toFixed(2) + " l S\n";
+        content += "BT /F1 8 Tf " + (m._xPdf + 11).toFixed(2) + " " + (m._yPdf + 6).toFixed(2) + " Td " + pdfLiteral(m.id) + " Tj ET\n";
+      });
+    }
+
+    const enc = new TextEncoder();
+    const streamBody = jsonZ && jsonZ.length ? jsonZ : jsonBytes;
+    const pageRes = jpg && jpg.length
+      ? "<< /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> >>"
+      : "<< /Font << /F1 5 0 R >> >>";
+    const objs = [
+      "<< /Type /Catalog /Pages 2 0 R /Names 7 0 R /PageMode /UseAttachments >>",
+      "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + W + " " + H + "] /Contents 4 0 R /Resources " + pageRes + " >>",
+      "<< /Length " + enc.encode(content).length + " >>\nstream\n" + content + "endstream",
+      "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+    ];
+    const imgHead = jpg && jpg.length
+      ? "<< /Type /XObject /Subtype /Image /Width " + imgW + " /Height " + imgH +
+        " /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length " + jpg.length + " >>\nstream\n"
+      : "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n";
+    const namesObj = "<< /EmbeddedFiles 8 0 R >>";
+    const nameTree = "<< /Names [(tree_markers.json) 9 0 R] >>";
+    const filespec = "<< /Type /Filespec /F (tree_markers.json) /UF (tree_markers.json) /Desc (ArborMark markers) /EF << /F 10 0 R >> >>";
+    const embHead = (jsonZ && jsonZ.length)
+      ? "<< /Type /EmbeddedFile /Length " + streamBody.length + " /Filter /FlateDecode /DL " + jsonBytes.length + " /Params << /Size " + jsonBytes.length + " >> >>\nstream\n"
+      : "<< /Type /EmbeddedFile /Length " + streamBody.length + " /Params << /Size " + jsonBytes.length + " >> >>\nstream\n";
+
+    const chunks = [enc.encode("%PDF-1.7\n%\x80\x80\x80\x80\n")];
+    const offs = [0];
+    let pos = chunks[0].length;
+    function addObj(num, bodyBytes) {
+      const head = enc.encode(num + " 0 obj\n");
+      const tail = enc.encode("\nendobj\n");
+      offs.push(pos);
+      chunks.push(head, bodyBytes, tail);
+      pos += head.length + bodyBytes.length + tail.length;
+    }
+    objs.forEach((s, i) => addObj(i + 1, enc.encode(s)));
+    const imgPayload = jpg && jpg.length ? jpg : new Uint8Array([255]);
+    const ih = enc.encode(imgHead);
+    const ie = enc.encode("endstream");
+    const imgObj = new Uint8Array(ih.length + imgPayload.length + ie.length);
+    imgObj.set(ih, 0); imgObj.set(imgPayload, ih.length); imgObj.set(ie, ih.length + imgPayload.length);
+    addObj(6, imgObj);
+    addObj(7, enc.encode(namesObj));
+    addObj(8, enc.encode(nameTree));
+    addObj(9, enc.encode(filespec));
+    const eh = enc.encode(embHead);
+    const ee = enc.encode("endstream");
+    const emb = new Uint8Array(eh.length + streamBody.length + ee.length);
+    emb.set(eh, 0); emb.set(streamBody, eh.length); emb.set(ee, eh.length + streamBody.length);
+    addObj(10, emb);
+
+    const xrefPos = pos;
+    let xref = "xref\n0 11\n0000000000 65535 f \n";
+    for (let i = 1; i <= 10; i++) xref += String(offs[i]).padStart(10, "0") + " 00000 n \n";
+    const xrefB = enc.encode(xref);
+    chunks.push(xrefB);
+    chunks.push(enc.encode("trailer\n<< /Size 11 /Root 1 0 R >>\nstartxref\n" + xrefPos + "\n%%EOF\n"));
+    let n = 0;
+    chunks.forEach((c) => { n += c.length; });
+    const out = new Uint8Array(n);
+    let o = 0;
+    chunks.forEach((c) => { out.set(c, o); o += c.length; });
+    const blob = new Blob([out], { type: "application/pdf" });
+    const name = (locName || "tree-plan") + (opts.printMarkers ? "-plan.pdf" : "-ArborMark.pdf");
+    await downloadBlob(blob, name, [{ description: "PDF", accept: { "application/pdf": [".pdf"] } }]);
+    setStatus(opts.printMarkers
+      ? "Exported view/print plan with " + spots.length + " printed trees."
+      : "Exported ArborMark PDF with " + spots.length + " editable trees (no printed dots).", "ok");
+  }
+
   if ($("btn-export-pdf-file")) $("btn-export-pdf-file").addEventListener("click", exportAnnotatedPdf);
+  if ($("btn-export-arbormark")) $("btn-export-arbormark").addEventListener("click", () => exportArborMarkPdf({ printMarkers: false }));
+  if ($("btn-export-plan-view")) $("btn-export-plan-view").addEventListener("click", () => exportArborMarkPdf({ printMarkers: true }));
+
+  function clearExportRectPreview() {
+    if (state.exportRectLayer) {
+      try { map.removeLayer(state.exportRectLayer); } catch (_) {}
+      state.exportRectLayer = null;
+    }
+  }
+  function setExportAreaMode(on) {
+    state.exportAreaMode = !!on;
+    state._exportDragStart = null;
+    const btn = $("btn-select-export-area");
+    if (btn) {
+      btn.classList.toggle("is-on", state.exportAreaMode);
+      btn.textContent = state.exportAreaMode ? "Drag a box on the map…" : "Select export area";
+    }
+    if (state.exportAreaMode) {
+      if (state.addSpotMode) setAddSpotMode(false);
+      if (state.moveMode) setMoveMode(false);
+      if (map.dragging && map.dragging.disable) map.dragging.disable();
+      setStatus("Drag a rectangle on the map. That area will be exported.", "ok");
+    } else if (map.dragging && map.dragging.enable) {
+      map.dragging.enable();
+    }
+  }
+  function finishExportBox(a, b) {
+    if (!a || !b) return;
+    const bounds = L.latLngBounds(a, b);
+    if (!bounds.isValid() || bounds.getNorthEast().distanceTo(bounds.getSouthWest()) < 8) {
+      setStatus("Box too small. Drag a larger area.", "warn");
+      return;
+    }
+    state.exportArea = bounds;
+    clearExportRectPreview();
+    state.exportRectLayer = L.rectangle(bounds, {
+      color: "#2563eb", weight: 2, fillColor: "#3b82f6", fillOpacity: 0.08, interactive: false
+    }).addTo(map);
+    setExportAreaMode(false);
+    setStatus("Export area set. Now tap Export ArborMark PDF.", "ok");
+  }
+  map.on("mousedown", function (e) {
+    if (!state.exportAreaMode || e.originalEvent && e.originalEvent.button) return;
+    state._exportDragStart = e.latlng;
+    if (e.originalEvent && e.originalEvent.preventDefault) e.originalEvent.preventDefault();
+  });
+  map.on("mousemove", function (e) {
+    if (!state.exportAreaMode || !state._exportDragStart) return;
+    const b = L.latLngBounds(state._exportDragStart, e.latlng);
+    if (state.exportRectLayer) {
+      try { state.exportRectLayer.setBounds(b); } catch (_) {}
+    } else {
+      state.exportRectLayer = L.rectangle(b, {
+        color: "#2563eb", weight: 2, fillColor: "#3b82f6", fillOpacity: 0.08, interactive: false
+      }).addTo(map);
+    }
+  });
+  map.on("mouseup", function (e) {
+    if (!state.exportAreaMode || !state._exportDragStart) return;
+    const a = state._exportDragStart;
+    state._exportDragStart = null;
+    finishExportBox(a, e.latlng);
+  });
+  if ($("btn-select-export-area")) {
+    $("btn-select-export-area").addEventListener("click", () => setExportAreaMode(!state.exportAreaMode));
+  }
   document.querySelectorAll(".pdf-tool").forEach((btn) => {
     btn.addEventListener("click", () => setPdfTool(btn.getAttribute("data-pdf-tool")));
   });
@@ -4562,7 +5085,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=73").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=79").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
