@@ -1011,3 +1011,19 @@ body.tree-plan-open #tree-plan-banner { display: block; }
   #tree-plan-mask .tree-plan-card { max-height: 52vh; border-radius: 12px 12px 0 0; }
   .tree-plan-preview-wrap { max-height: 28vh; }
 }
+
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.swatch {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.25);
+  padding: 0; cursor: pointer; background: center/cover;
+}
+.swatch.is-on { border-color: #fff; box-shadow: 0 0 0 2px #5b8cff; }
+.hide-color-list label {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; padding: 4px 0;
+}
+.hide-color-list .dot {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.3); display: inline-block;
+}

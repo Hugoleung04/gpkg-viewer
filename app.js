@@ -7,9 +7,34 @@
 
   const MAX_FEATURES_DEFAULT = 25000;
   const COLORS = [
-    "#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#a855f7",
-    "#06b6d4", "#84cc16", "#f97316", "#ec4899", "#14b8a6"
+    "#3b82f6", "#22c55e", "#f59e0b", "#a855f7",
+    "#06b6d4", "#84cc16", "#f97316", "#ec4899", "#14b8a6",
+    "#0ea5e9", "#65a30d", "#7c3aed", "#0f766e", "#1d4ed8"
   ];
+  const SPOT_PALETTE = [
+    { hex: "#3b82f6", name: "Blue" },
+    { hex: "#0ea5e9", name: "Sky" },
+    { hex: "#22c55e", name: "Green" },
+    { hex: "#65a30d", name: "Lime" },
+    { hex: "#14b8a6", name: "Teal" },
+    { hex: "#0f766e", name: "Pine" },
+    { hex: "#f59e0b", name: "Orange" },
+    { hex: "#eab308", name: "Yellow" },
+    { hex: "#f97316", name: "Amber" },
+    { hex: "#ef4444", name: "Red" },
+    { hex: "#ec4899", name: "Pink" },
+    { hex: "#a855f7", name: "Purple" },
+    { hex: "#7c3aed", name: "Violet" },
+    { hex: "#1d4ed8", name: "Navy" },
+    { hex: "#64748b", name: "Gray" },
+    { hex: "#111827", name: "Black" }
+  ];
+  function normHex(c) {
+    return String(c || "").trim().toLowerCase();
+  }
+  function isColorHidden(c) {
+    return (state.hiddenColors || []).indexOf(normHex(c)) >= 0;
+  }
 
   const state = {
     files: [], // { id, name, size, geoPackage, layers: [] }
@@ -37,6 +62,7 @@
       try { return JSON.parse(localStorage.getItem("gpkg-viewer-extra-cols") || "[]"); }
       catch (_) { return []; }
     })(),
+    hiddenColors: [],
     addSpotMode: false,
     exportAreaMode: false,
     exportArea: null,
@@ -619,8 +645,12 @@
   }
 
   function nextColor() {
-    const c = COLORS[state.colorIndex % COLORS.length];
+    let c = COLORS[state.colorIndex % COLORS.length];
     state.colorIndex += 1;
+    if (normHex(c) === "#ef4444") {
+      c = COLORS[state.colorIndex % COLORS.length];
+      state.colorIndex += 1;
+    }
     return c;
   }
 
@@ -722,10 +752,11 @@
     if (t.includes("point")) {
       return {
         radius: r,
-        color: "#0b1220",
-        weight: r <= 3 ? 0.6 : 1,
+        color: "#111111",
+        weight: 1,
+        opacity: 1,
         fillColor: color,
-        fillOpacity: 0.88
+        fillOpacity: 1
       };
     }
     return {
@@ -743,7 +774,7 @@
       f.layers.forEach((ly) => {
         if (ly.kind !== "feature" || !ly.leafletLayer) return;
         ly.leafletLayer.eachLayer((l) => {
-          if (typeof l.setRadius === "function") l.setRadius(r);
+          applyFeatureStyle(l, ly);
         });
       });
     });
@@ -769,10 +800,12 @@
 
   function applyFeatureStyle(layer, ly) {
     if (!layer || typeof layer.setStyle !== "function") return;
-    const st = styleFor(featureColor(layer, ly.color), ly.geomType);
-    if (state.selectedMarker === layer) {
-      st.weight = 3;
-      st.color = "#fbbf24";
+    const col = featureColor(layer, ly.color);
+    const st = styleFor(col, ly.geomType);
+    if (isColorHidden(col)) {
+      st.opacity = 0;
+      st.fillOpacity = 0;
+      st.radius = 0;
     }
     layer.setStyle(st);
     if (typeof layer.setRadius === "function") layer.setRadius(st.radius);
@@ -869,6 +902,9 @@
   function bindFeatureLabel(layer) {
     if (!layer) return;
     try { if (layer.unbindTooltip) layer.unbindTooltip(); } catch (_) {}
+    const ly = parentLayerOf(layer);
+    const col = featureColor(layer, ly && ly.color);
+    if (isColorHidden(col)) return;
     if (!labelsShouldShow()) return;
     const text = labelText(layer.feature, state.labelField);
     if (!text) return;
@@ -1126,6 +1162,7 @@
     if (save) persistColorEdits();
     refreshEditPanel();
     syncInspectChecks();
+    refreshHideColorList();
   }
 
   function focusRingSize() {
@@ -1249,9 +1286,7 @@
       $("edit-coords").textContent = parts.join("  ·  ");
     }
     const ly = parentLayerOf(m);
-    if ($("spot-color")) {
-      $("spot-color").value = featureColor(m, (ly && ly.color) || "#3b82f6");
-    }
+    highlightSpotSwatch(featureColor(m, (ly && ly.color) || "#3b82f6"));
   }
 
   let lastTap = { layer: null, t: 0 };
@@ -1319,6 +1354,8 @@
         if (!ly.visible || !ly.leafletLayer) return;
         ly.leafletLayer.eachLayer((l) => {
           if (typeof l.getLatLng !== "function") return;
+          const col = featureColor(l, ly.color);
+          if (isColorHidden(col)) return;
           const p = map.latLngToContainerPoint(l.getLatLng());
           const d = p.distanceTo(containerPoint);
           if (d <= tol && d < bestD) {
@@ -2141,6 +2178,7 @@
     if (!state.files.length) {
       host.innerHTML = '<p class="empty-hint">No files loaded yet.</p>';
       $("stats").textContent = "";
+      refreshHideColorList();
       return;
     }
 
@@ -2165,12 +2203,12 @@
           countLabel = (ly.count != null ? ly.count : ly.loaded) + " features";
           if (ly.truncated) countLabel += " (showing " + ly.loaded + ")";
         }
-        html += '<label class="layer-row' + active + '" data-key="' + escapeHtml(ly.key) + '">';
+        html += '<div class="layer-row' + active + '" data-key="' + escapeHtml(ly.key) + '">';
         html += '<input type="checkbox" data-toggle="' + escapeHtml(ly.key) + '" ' + checked + ">";
         html += '<span class="swatch" style="background:' + ly.color + '"></span>';
-        html += '<span class="layer-text"><span class="layer-name">' + escapeHtml(ly.tableName) + "</span>";
+        html += '<span class="layer-text" data-select="' + escapeHtml(ly.key) + '"><span class="layer-name">' + escapeHtml(ly.tableName) + "</span>";
         html += '<span class="layer-sub">' + escapeHtml(badge) + (countLabel ? " · " + countLabel : "") + "</span></span>";
-        html += "</label>";
+        html += "</div>";
       });
 
       html += '<div class="file-actions">';
@@ -2183,6 +2221,7 @@
     host.innerHTML = html;
     $("stats").textContent = state.files.length + " file" + (state.files.length === 1 ? "" : "s") +
       " · " + totalLayers + " layers · " + totalFeats.toLocaleString() + " features";
+    refreshHideColorList();
   }
 
   function downloadIphoneCopy(fileId) {
@@ -2214,6 +2253,14 @@
     return null;
   }
 
+  function firstVisibleFeatureLayer() {
+    for (let i = 0; i < state.files.length; i++) {
+      const ly = (state.files[i].layers || []).find((l) => l.visible && l.kind === "feature" && l.features && l.features.length);
+      if (ly) return ly;
+    }
+    return null;
+  }
+
   function toggleLayer(key, on) {
     const found = findLayer(key);
     if (!found) return;
@@ -2223,6 +2270,19 @@
       else map.removeLayer(found.layer.leafletLayer);
     }
     applyAllLabels();
+    if (on) {
+      selectLayer(key);
+      if (typeof setCatalogOpen === "function") setCatalogOpen(true);
+    } else if (state.selectedLayerKey === key) {
+      const next = firstVisibleFeatureLayer();
+      if (next) selectLayer(next.key);
+      else {
+        state.selectedLayerKey = null;
+        renderTable(null);
+        renderSidebar();
+        if (typeof setCatalogOpen === "function") setCatalogOpen(false);
+      }
+    }
   }
 
   function zoomToLayer(ly) {
@@ -2533,7 +2593,7 @@
 
       features.forEach((ft) => {
         const p = ft.properties || {};
-        if (p.color && !p._editColor) p._editColor = p.color;
+        if (p.color && !p._editColor && normHex(p.color) !== "#ef4444") p._editColor = p.color;
         ft.properties = p;
       });
 
@@ -3969,6 +4029,18 @@
   if ($("btn-select-export-area")) {
     $("btn-select-export-area").addEventListener("click", () => setExportAreaMode(!state.exportAreaMode));
   }
+  function clearExportArea() {
+    state.exportArea = null;
+    clearExportRectPreview();
+    setStatus("Export area cleared.", "ok");
+  }
+  map.on("dblclick", function (e) {
+    if (state.exportAreaMode || !state.exportArea) return;
+    if (state.exportArea.contains(e.latlng)) return;
+    if (e.originalEvent && e.originalEvent.preventDefault) e.originalEvent.preventDefault();
+    L.DomEvent.stop(e);
+    clearExportArea();
+  });
   document.querySelectorAll(".pdf-tool").forEach((btn) => {
     btn.addEventListener("click", () => setPdfTool(btn.getAttribute("data-pdf-tool")));
   });
@@ -4271,9 +4343,14 @@
       downloadIphoneCopy(btn.dataset.iphoneCopy);
       return;
     }
-    const row = e.target.closest(".layer-row");
-    if (row && row.dataset.key) {
-      selectLayer(row.dataset.key);
+    if (e.target && e.target.dataset && e.target.dataset.toggle) return;
+    const pick = e.target.closest("[data-select]");
+    if (pick && pick.dataset.select) {
+      const found = findLayer(pick.dataset.select);
+      if (found && found.layer.visible !== false) {
+        selectLayer(pick.dataset.select);
+        if (typeof setCatalogOpen === "function") setCatalogOpen(true);
+      }
     }
   });
   $("file-list").addEventListener("dblclick", (e) => {
@@ -5002,11 +5079,72 @@
       applyAllLabels();
     });
   }
-  if ($("spot-color")) {
-    $("spot-color").addEventListener("input", (e) => {
-      paintSpot(state.selectedMarker, e.target.value, true);
+  function highlightSpotSwatch(hex) {
+    const want = normHex(hex);
+    document.querySelectorAll("#spot-swatches .swatch").forEach((b) => {
+      b.classList.toggle("is-on", normHex(b.getAttribute("data-color")) === want);
     });
   }
+  function usedSpotColors() {
+    const set = new Set();
+    state.files.forEach((f) => f.layers.forEach((ly) => {
+      if (!ly.leafletLayer) return;
+      ly.leafletLayer.eachLayer((l) => {
+        if (!l.feature) return;
+        set.add(normHex(featureColor(l, ly.color)));
+      });
+    }));
+    return Array.from(set).filter(Boolean);
+  }
+  function refreshHideColorList() {
+    const box = $("hide-color-list");
+    if (!box) return;
+    const used = usedSpotColors();
+    if (!used.length) {
+      box.innerHTML = "<p class='hint'>Change a spot colour first.</p>";
+      return;
+    }
+    box.innerHTML = used.map((hex) => {
+      const pal = SPOT_PALETTE.find((p) => normHex(p.hex) === hex);
+      const name = pal ? pal.name : hex;
+      const on = !isColorHidden(hex);
+      return "<label><input type='checkbox' data-color='" + hex + "'" + (on ? " checked" : "") +
+        "> <span class='dot' style='background:" + hex + "'></span> " + escapeHtml(name) + "</label>";
+    }).join("");
+  }
+  function applyHiddenColors() {
+    state.files.forEach((f) => f.layers.forEach((ly) => {
+      if (!ly.leafletLayer) return;
+      ly.leafletLayer.eachLayer((l) => applyFeatureStyle(l, ly));
+    }));
+    applyAllLabels();
+  }
+  (function initSwatches() {
+    const host = $("spot-swatches");
+    if (!host) return;
+    host.innerHTML = SPOT_PALETTE.map((p) =>
+      "<button type='button' class='swatch' data-color='" + p.hex + "' title='" + p.name +
+      "' style='background:" + p.hex + "'></button>"
+    ).join("");
+    host.addEventListener("click", (e) => {
+      const b = e.target.closest(".swatch");
+      if (!b || !state.selectedMarker) return;
+      paintSpot(state.selectedMarker, b.getAttribute("data-color"), true);
+    });
+  })();
+  if ($("hide-color-list")) {
+    $("hide-color-list").addEventListener("change", (e) => {
+      const inp = e.target;
+      if (!inp || inp.type !== "checkbox") return;
+      const hex = normHex(inp.getAttribute("data-color"));
+      const hidden = new Set(state.hiddenColors || []);
+      if (inp.checked) hidden.delete(hex);
+      else hidden.add(hex);
+      state.hiddenColors = Array.from(hidden);
+      applyHiddenColors();
+    });
+  }
+  refreshHideColorList();
   if ($("btn-move-spot")) {
     $("btn-move-spot").addEventListener("click", () => setMoveMode(!state.moveMode));
   }
@@ -5085,7 +5223,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=79").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=84").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||

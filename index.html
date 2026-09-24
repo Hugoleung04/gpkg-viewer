@@ -12,8 +12,8 @@
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="icon" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="vendor/leaflet.css?v=79" />
-  <link rel="stylesheet" href="styles.css?v=79" />
+  <link rel="stylesheet" href="vendor/leaflet.css?v=84" />
+  <link rel="stylesheet" href="styles.css?v=84" />
 </head>
 <body>
   <header class="topbar">
@@ -21,7 +21,7 @@
     <div class="brand">
       <div class="logo" aria-hidden="true"></div>
       <div>
-        GeoPackage Viewer <span class="ver">v1.69</span>
+        GeoPackage Viewer <span class="ver">v1.74</span>
         <small>Phone + computer — files stay on this device</small>
       </div>
     </div>
@@ -125,10 +125,10 @@
       <div class="card-title">Selected spot</div>
       <div class="edit-id" id="edit-id">—</div>
       <div class="hint" id="edit-coords"></div>
-      <label class="field">Color
-        <input id="spot-color" type="color" value="#3b82f6" />
-      </label>
-      <p class="hint">Double tap or Mark red. Turn on Move this spot, then drag.</p>
+      <div class="field">Color
+        <div class="swatches" id="spot-swatches"></div>
+      </div>
+      <p class="hint">Tap a colour. Double tap or Red = inspected.</p>
       <button class="btn full" id="btn-move-spot" type="button">Move this spot</button>
       <button class="btn full" id="btn-mark-red" type="button">Mark red</button>
       <button class="btn full" id="btn-reset-spot" type="button">Reset to original</button>
@@ -136,6 +136,11 @@
       <button class="btn full" id="btn-save-as-2" type="button">Save as new file</button>
       <button class="btn full" id="btn-export-xlsx-2" type="button">Export catalog (template)</button>
       <button class="btn full" id="btn-export-cols-2" type="button">Export selected columns</button>
+    </div>
+    <div class="settings-card" id="hide-color-card">
+      <div class="card-title">Hide spots by color</div>
+      <div id="hide-color-list" class="hide-color-list"></div>
+      <p class="hint">Untick a colour to hide those spots on the map.</p>
     </div>
 
     <details class="settings-card extras">
@@ -228,9 +233,9 @@
     </div>
   </div>
 
-  <script src="vendor/leaflet.js?v=79"></script>
-  <script src="vendor/geopackage.min.js?v=79"></script>
-  <script src="vendor/pdf.min.js?v=79"></script>
-  <script src="app.js?v=79"></script>
+  <script src="vendor/leaflet.js?v=84"></script>
+  <script src="vendor/geopackage.min.js?v=84"></script>
+  <script src="vendor/pdf.min.js?v=84"></script>
+  <script src="app.js?v=84"></script>
 </body>
 </html>
