@@ -12,8 +12,8 @@
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="icon" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="vendor/leaflet.css?v=84" />
-  <link rel="stylesheet" href="styles.css?v=84" />
+  <link rel="stylesheet" href="vendor/leaflet.css?v=87" />
+  <link rel="stylesheet" href="styles.css?v=87" />
 </head>
 <body>
   <header class="topbar">
@@ -21,7 +21,7 @@
     <div class="brand">
       <div class="logo" aria-hidden="true"></div>
       <div>
-        GeoPackage Viewer <span class="ver">v1.74</span>
+        GeoPackage Viewer <span class="ver">v1.77</span>
         <small>Phone + computer — files stay on this device</small>
       </div>
     </div>
@@ -75,7 +75,10 @@
       <input id="pdf-input" type="file" accept="application/pdf,.pdf,*/*" hidden />
       <button class="btn full" id="btn-import-tree-plan" type="button">Import tree plan PDF</button>
       <input id="tree-plan-input" type="file" accept="application/pdf,.pdf" hidden />
-      <div class="hint">ArborMark: spots appear at once. Other PDFs: a preview opens on the right. Tap a landmark on the preview, then the same place on the map, three times.</div>
+      <label class="field check"><input type="checkbox" id="arbormark-update-locs" /> Update locations in the open GPKG</label>
+      <label class="field check"><input type="checkbox" id="arbormark-add-new" /> Add trees that are only in the PDF</label>
+      <label class="field check"><input type="checkbox" id="arbormark-delete-missing" /> Delete trees missing from the PDF</label>
+      <div class="hint">Tick the options you need, then Import tree plan PDF. Matching IDs keep other GPKG fields. Leave all three off to import as a new layer.</div>
       <button class="btn full" id="btn-export-pdf-file" type="button">Export PDF</button>
       <button class="btn full" id="btn-select-export-area" type="button">Select export area</button>
       <button class="btn full" id="btn-export-arbormark" type="button">Export for ArborMark</button>
@@ -233,9 +236,9 @@
     </div>
   </div>
 
-  <script src="vendor/leaflet.js?v=84"></script>
-  <script src="vendor/geopackage.min.js?v=84"></script>
-  <script src="vendor/pdf.min.js?v=84"></script>
-  <script src="app.js?v=84"></script>
+  <script src="vendor/leaflet.js?v=87"></script>
+  <script src="vendor/geopackage.min.js?v=87"></script>
+  <script src="vendor/pdf.min.js?v=87"></script>
+  <script src="app.js?v=87"></script>
 </body>
 </html>

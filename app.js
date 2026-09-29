@@ -1056,14 +1056,16 @@
     layer.loaded = layer.features.length;
     if (layer.count != null) layer.count = layer.features.length;
   }
-  function deleteCatalogItem(fileRec, layer, feat) {
+  function deleteCatalogItem(fileRec, layer, feat, opts) {
     if (!layer || !feat) return;
     const marker = findMarkerForFeature(layer, feat);
     const label = labelText(feat, state.labelField) ||
       (feat.properties && (feat.properties["Tree ID"] || feat.properties.tree_no)) ||
       "this tree";
-    if (!window.confirm("Delete “" + label + "”?\n\nThe spot on the map and this catalog row will both be removed.\nThis cannot be undone unless you re-open the original file from disk.")) {
-      return;
+    if (!opts || !opts.silent) {
+      if (!window.confirm("Delete “" + label + "”?\n\nThe spot on the map and this catalog row will both be removed.\nThis cannot be undone unless you re-open the original file from disk.")) {
+        return;
+      }
     }
     if (marker && state.selectedMarker === marker) selectMarker(null);
     if (state.focusRing && marker) {
@@ -1080,6 +1082,7 @@
     if (layer.count != null) layer.count = Math.max(0, layer.count - 1);
     const key = featureKey(marker || { feature: feat }, fileRec && fileRec.name);
     persistDeletedKey(fileRec && fileRec.name, key);
+    if (opts && opts.silent) return;
     persistColorEdits();
     persistAddedSpots();
     renderSidebar();
@@ -2787,6 +2790,185 @@
     return null;
   }
 
+  function normTreeId(s) {
+    let t = String(s == null ? "" : s).trim().toUpperCase().replace(/\s+/g, "");
+    if (!t) return "";
+    const m = t.match(/^T-?0*([0-9]+[A-Z]*)$/);
+    if (m) return "T" + m[1];
+    const n = t.match(/^0*([0-9]+[A-Z]*)$/);
+    if (n) return "T" + n[1];
+    return t;
+  }
+
+  function treeIdFieldNames() {
+    return [
+      state.labelField,
+      "Tree No", "Tree ID", "Tree No.", "TreeID", "TreeNo",
+      "tree_no", "tree_id", "tree no", "tree id", "treeid",
+      "TREENO", "TREE_NO", "TREE_ID", "tree_2025", "tree_ref"
+    ].filter(Boolean);
+  }
+
+  function treeIdCandidates(ft) {
+    const p = (ft && ft.properties) || {};
+    const raws = [];
+    treeIdFieldNames().forEach((k) => {
+      if (p[k] != null && String(p[k]).trim() !== "") raws.push(String(p[k]).trim());
+    });
+    const set = [];
+    raws.forEach((raw) => {
+      if (set.indexOf(raw) < 0) set.push(raw);
+      const n = normTreeId(raw);
+      if (n && set.indexOf(n) < 0) set.push(n);
+    });
+    return set;
+  }
+
+  function featureTreeId(ft) {
+    const c = treeIdCandidates(ft);
+    return c[0] ? normTreeId(c[0]) || c[0] : "";
+  }
+
+  function wantArborMarkSync() {
+    return !!(
+      ($("arbormark-update-locs") && $("arbormark-update-locs").checked) ||
+      ($("arbormark-add-new") && $("arbormark-add-new").checked) ||
+      ($("arbormark-delete-missing") && $("arbormark-delete-missing").checked)
+    );
+  }
+
+  function treeNameField(layer) {
+    if (state.labelField) return state.labelField;
+    const cols = allCatalogColumns(layer);
+    const hit = cols.find((c) => /tree\s*(no|id|number)/i.test(c)) || cols.find((c) => /^id$/i.test(c));
+    return hit || "Tree No";
+  }
+
+  function applyArborMarkLocationsToCatalog(planFeatures) {
+    const found = currentCatalogLayer();
+    if (!found || !found.layer || !found.layer.features) {
+      setStatus("Open a GPKG first, then tick the ArborMark update options.", "warn");
+      return null;
+    }
+    const doUpdate = !!($("arbormark-update-locs") && $("arbormark-update-locs").checked);
+    const doAdd = !!($("arbormark-add-new") && $("arbormark-add-new").checked);
+    const doDel = !!($("arbormark-delete-missing") && $("arbormark-delete-missing").checked);
+    const layer = found.layer;
+    const byId = {};
+    planFeatures.forEach((ft) => {
+      treeIdCandidates(ft).forEach((id) => {
+        if (!byId[id]) byId[id] = ft;
+      });
+    });
+    const usedPlan = [];
+    function markUsed(src) {
+      if (usedPlan.indexOf(src) < 0) usedPlan.push(src);
+    }
+    let updated = 0;
+    const missingFeats = [];
+    (layer.features || []).forEach((ft) => {
+      let src = null;
+      treeIdCandidates(ft).forEach((id) => {
+        if (!src && byId[id]) src = byId[id];
+      });
+      if (!src || !src.geometry || !src.geometry.coordinates) {
+        missingFeats.push({ id: featureTreeId(ft) || "(no id)", feat: ft });
+        return;
+      }
+      markUsed(src);
+      if (doUpdate) {
+        const lng = src.geometry.coordinates[0];
+        const lat = src.geometry.coordinates[1];
+        if (isFinite(lat) && isFinite(lng)) {
+          ft.properties = ft.properties || {};
+          if (!ft.properties._origLatLng && ft.geometry && ft.geometry.coordinates) {
+            ft.properties._origLatLng = [ft.geometry.coordinates[1], ft.geometry.coordinates[0]];
+          }
+          ft.geometry = { type: "Point", coordinates: [lng, lat] };
+          writeCoordsToProps(ft.properties, layer, lat, lng);
+          const marker = findMarkerForFeature(layer, ft);
+          if (marker && typeof marker.setLatLng === "function") {
+            marker.feature = marker.feature || ft;
+            if (marker.feature !== ft && marker.feature.properties) {
+              marker.feature.geometry = ft.geometry;
+              writeCoordsToProps(marker.feature.properties, layer, lat, lng);
+            }
+            marker.setLatLng([lat, lng]);
+            bindFeatureLabel(marker);
+          }
+          updated += 1;
+        }
+      }
+    });
+    const extras = planFeatures.filter((ft) => usedPlan.indexOf(ft) < 0);
+    const addedIds = [];
+    if (doAdd && extras.length) {
+      const field = treeNameField(layer);
+      layer.columns = layer.columns || [];
+      ["X", "Y"].forEach((c) => {
+        if (layer.columns.indexOf(c) < 0) layer.columns.push(c);
+      });
+      if (state.hiddenCols && state.hiddenCols.length) {
+        state.hiddenCols = state.hiddenCols.filter((c) => !/^(x|y|easting|northing)$/i.test(String(c).trim()));
+        try { localStorage.setItem("gpkg-viewer-hidden-cols", JSON.stringify(state.hiddenCols)); } catch (_) {}
+      }
+      extras.forEach((src, i) => {
+        const lng = src.geometry && src.geometry.coordinates ? src.geometry.coordinates[0] : NaN;
+        const lat = src.geometry && src.geometry.coordinates ? src.geometry.coordinates[1] : NaN;
+        if (!isFinite(lat) || !isFinite(lng)) return;
+        const id = featureTreeId(src) || (src.properties && src.properties["Tree No"]) || ("PDF-" + (i + 1));
+        const props = { _added: true, _addedId: "add-" + Date.now() + "-" + i + "-" + Math.floor(Math.random() * 9999) };
+        allCatalogColumns(layer).forEach((c) => { props[c] = props[c] || ""; });
+        props[field] = id;
+        props["Tree No"] = props["Tree No"] || id;
+        writeCoordsToProps(props, layer, lat, lng);
+        if (props.X == null) props.X = Math.round(wgs84ToHk1980Grid(lng, lat)[0] * 1000) / 1000;
+        if (props.Y == null) props.Y = Math.round(wgs84ToHk1980Grid(lng, lat)[1] * 1000) / 1000;
+        placeSpotOnLayer(found.file, layer, lat, lng, props, true);
+        addedIds.push(id);
+      });
+    }
+    const deletedIds = [];
+    if (doDel && missingFeats.length) {
+      const names = missingFeats.map((m) => m.id);
+      const ok = window.confirm(
+        "Delete " + names.length + " tree" + (names.length === 1 ? "" : "s") +
+        " that are in the GPKG but not in the PDF?\n\n" + names.join(", ") +
+        "\n\nSpots and catalog rows will be removed."
+      );
+      if (ok) {
+        missingFeats.forEach((m) => {
+          deleteCatalogItem(found.file, layer, m.feat, { silent: true });
+          deletedIds.push(m.id);
+        });
+      }
+    }
+    persistColorEdits();
+    persistAddedSpots();
+    renderSidebar();
+    renderTable(layer);
+    refreshLabelFieldOptions();
+    if (layer.leafletLayer && layer.leafletLayer.getBounds) {
+      try {
+        const b = layer.leafletLayer.getBounds();
+        if (b && b.isValid()) map.fitBounds(b, { padding: [28, 28], maxZoom: 18 });
+      } catch (_) {}
+    }
+    const parts = [];
+    if (doUpdate) parts.push("updated " + updated);
+    if (doAdd) parts.push("added " + addedIds.length);
+    if (doDel) parts.push("deleted " + deletedIds.length);
+    let msg = "ArborMark sync: " + (parts.join(", ") || "no changes") + ".";
+    if (!doAdd && extras.length) msg += " " + extras.length + " PDF-only tree(s) not added.";
+    if (!doDel && missingFeats.length) msg += " " + missingFeats.length + " GPKG-only tree(s) kept.";
+    setStatus(msg, "ok");
+    const lines = [];
+    if (addedIds.length) lines.push("Added spots / rows:\n" + addedIds.join(", "));
+    if (deletedIds.length) lines.push("Deleted spots / rows not found in the PDF:\n" + deletedIds.join(", "));
+    if (lines.length) window.alert(lines.join("\n\n"));
+    return updated + addedIds.length + deletedIds.length;
+  }
+
   async function importTreePlanPdf(file) {
     setStatus("Reading tree plan PDF…", "");
     try {
@@ -2813,10 +2995,12 @@
         const E = Math.round(grid[0] * 1000) / 1000;
         const N = Math.round(grid[1] * 1000) / 1000;
         const wgs = hk1980GridToWgs84(E, N);
+        const tid = String(mk.id || mk.uid || "").trim() || ("PDF-" + (features.length + 1));
         features.push({
           type: "Feature",
           properties: {
-            "Tree No": mk.id || "",
+            "Tree No": tid,
+            id: tid,
             X: E,
             Y: N,
             note: mk.note || "",
@@ -2827,6 +3011,11 @@
       });
       if (!features.length) {
         setStatus("No tree spots found in this plan.", "warn");
+        return;
+      }
+      if (wantArborMarkSync()) {
+        const n = applyArborMarkLocationsToCatalog(features);
+        if (n == null) return;
         return;
       }
       const json = new File(
@@ -5223,7 +5412,7 @@
   window.addEventListener("resize", () => map.invalidateSize());
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js?v=84").catch(() => {});
+    navigator.serviceWorker.register("sw.js?v=87").catch(() => {});
   }
 
   const standalone = window.matchMedia("(display-mode: standalone)").matches ||
